@@ -48,11 +48,14 @@ public class HrAgentProperties {
         /** 多账号 user-data-dir 根目录 */
         private String dataDirBase = System.getProperty("user.home") + "/.liepin-cli/profiles";
 
-        /** 搜索命令超时(分钟) */
-        private int searchTimeoutMinutes = 8;
+        /** 搜索命令超时(分钟,200 条需翻页耗时较长) */
+        private int searchTimeoutMinutes = 15;
 
         /** 简历/打招呼等短命令超时(分钟) */
         private int shortTimeoutMinutes = 3;
+
+        /** 单次搜索返回候选人上限 */
+        private int searchLimit = 200;
     }
 
     @Data

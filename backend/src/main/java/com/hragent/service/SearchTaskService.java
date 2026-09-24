@@ -99,7 +99,8 @@ public class SearchTaskService {
 
         try {
             Duration timeout = Duration.ofMinutes(properties.getLiepin().getSearchTimeoutMinutes());
-            List<JsonNode> candidates = commandService.search(account, task.getKeywords(), timeout);
+            List<JsonNode> candidates = commandService.search(
+                    account, task.getKeywords(), properties.getLiepin().getSearchLimit(), timeout);
             int saved = saveCandidates(task.getJdId(), candidates);
             queueService.complete(task.getId());
             log.info("任务 {} 完成:搜索 {} 条,落库/更新 {} 条", task.getId(), candidates.size(), saved);

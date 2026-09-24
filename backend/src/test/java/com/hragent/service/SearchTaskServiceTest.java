@@ -25,6 +25,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -110,7 +111,7 @@ class SearchTaskServiceTest {
 
     @Test
     void executeSavesCandidatesAndDedups() throws Exception {
-        when(commandService.search(any(LiepinAccount.class), anyString(), any(Duration.class)))
+        when(commandService.search(any(LiepinAccount.class), anyString(), anyInt(), any(Duration.class)))
                 .thenReturn(candidatesJson());
 
         SearchTask task = createAndClaimTask();
@@ -141,7 +142,7 @@ class SearchTaskServiceTest {
 
         SearchTask after = taskMapper.selectById(task.getId());
         assertEquals("FAILED", after.getStatus());
-        verify(commandService, never()).search(any(), anyString(), any());
+        verify(commandService, never()).search(any(), anyString(), anyInt(), any());
     }
 
     @Test
@@ -156,7 +157,7 @@ class SearchTaskServiceTest {
         SearchTask after = taskMapper.selectById(task.getId());
         assertEquals("QUEUED", after.getStatus());
         assertEquals(1, after.getRetryCount());
-        verify(commandService, never()).search(any(), anyString(), any());
+        verify(commandService, never()).search(any(), anyString(), anyInt(), any());
     }
 
     @Test

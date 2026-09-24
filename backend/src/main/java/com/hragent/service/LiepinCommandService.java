@@ -40,8 +40,8 @@ public class LiepinCommandService {
     }
 
     /** 搜索人才 → 候选人数组 */
-    public List<JsonNode> search(LiepinAccount account, String keywords, Duration timeout) {
-        CliResult result = run(account, timeout, "search", keywords, "--json");
+    public List<JsonNode> search(LiepinAccount account, String keywords, int limit, Duration timeout) {
+        CliResult result = run(account, timeout, "search", keywords, "--limit", String.valueOf(limit), "--json");
         JsonNode node = JsonExtractor.parse(result.stdout())
                 .orElseThrow(() -> BizException.badRequest("搜索输出无有效 JSON"));
         if (!node.isArray()) {
