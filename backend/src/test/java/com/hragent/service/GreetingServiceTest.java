@@ -136,4 +136,25 @@ class GreetingServiceTest {
         assertEquals(2, greetingMapper.selectCount(new LambdaQueryWrapper<GreetingRecord>()
                 .eq(GreetingRecord::getStatus, "SENT")));
     }
+
+    @Test
+    void sendFailureRecordsAndAllowsRetry() {
+        // 首次发送失败(如候选人隐私保护)
+        when(commandService.greet(any(), anyString(), anyString(), any()))
+                .thenThrow(new com.hragent.executor.CliException(
+                        com.hragent.executor.CliException.Type.FAILED, "该人选设置了隐私保护,无法开聊"));
+        Candidate c = candidate(1);
+        assertFalse(greetingService.tryGreet(account, c), "发送失败应返回 false");
+        assertEquals(1, greetingMapper.selectCount(new LambdaQueryWrapper<GreetingRecord>()
+                .eq(GreetingRecord::getStatus, "SEND_FAILED")));
+
+        // 第二次恢复可发送:应允许重试并更新为 SENT(不新增记录)
+        // 用 doReturn 风格覆盖 thenThrow stub(when() 风格会触发上一条 thenThrow)
+        org.mockito.Mockito.doReturn(java.util.Optional.empty())
+                .when(commandService).greet(any(), anyString(), anyString(), any());
+        assertTrue(greetingService.tryGreet(account, c), "失败后可重试");
+        assertEquals(1, greetingMapper.selectCount(null), "重试应更新而非新增");
+        assertEquals(1, greetingMapper.selectCount(new LambdaQueryWrapper<GreetingRecord>()
+                .eq(GreetingRecord::getStatus, "SENT")));
+    }
 }

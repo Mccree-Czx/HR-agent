@@ -90,16 +90,17 @@ public class GreetingService {
 
     /** 单个候选人打招呼(含防重复/配额/节奏/模式判断),返回是否创建记录 */
     public boolean tryGreet(LiepinAccount account, Candidate candidate) {
-        // 1. 全局防重复联系(评审 P1-6)
+        // 1. 全局防重复联系(评审 P1-6);发送失败(SEND_FAILED)的允许重试
         Long existing = greetingMapper.selectCount(new LambdaQueryWrapper<GreetingRecord>()
-                .eq(GreetingRecord::getCandidateId, candidate.getId()));
+                .eq(GreetingRecord::getCandidateId, candidate.getId())
+                .ne(GreetingRecord::getStatus, "SEND_FAILED"));
         if (existing > 0) {
             log.info("候选人 {} 已被联系过,跳过", candidate.getId());
             return false;
         }
 
         // 2. 每日配额
-        if (Boolean.FALSE.equals(account.getCircuitBreaker()) && isQuotaExhausted(account)) {
+        if (isQuotaExhausted(account)) {
             log.warn("账号 {} 当日打招呼配额已用尽,停止", account.getId());
             return false;
         }
@@ -114,16 +115,33 @@ public class GreetingService {
             return true;
         }
 
-        // 5. 自动模式:节奏控制 + 发送
-        enforcePace(account);
-        commandService.greet(account, candidate.getResumeId(), message,
-                Duration.ofMinutes(properties.getLiepin().getShortTimeoutMinutes()));
-        insertRecord(account, candidate, message, "SENT");
-        log.info("候选人 {} 打招呼已发送(账号 {})", candidate.getId(), account.getId());
-        return true;
+        // 5. 自动模式:节奏控制 + 发送;失败(如候选人设隐私保护)记录后继续下一人
+        try {
+            enforcePace(account);
+            commandService.greet(account, candidate.getResumeId(), message,
+                    Duration.ofMinutes(properties.getLiepin().getShortTimeoutMinutes()));
+            insertRecord(account, candidate, message, "SENT");
+            log.info("候选人 {} 打招呼已发送(账号 {})", candidate.getId(), account.getId());
+            return true;
+        } catch (Exception e) {
+            log.warn("候选人 {} 打招呼发送失败: {}", candidate.getId(), e.getMessage());
+            insertRecord(account, candidate, message, "SEND_FAILED");
+            return false;
+        }
     }
 
     private void insertRecord(LiepinAccount account, Candidate candidate, String message, String status) {
+        GreetingRecord existing = greetingMapper.selectOne(new LambdaQueryWrapper<GreetingRecord>()
+                .eq(GreetingRecord::getCandidateId, candidate.getId())
+                .last("LIMIT 1"));
+        if (existing != null) {
+            existing.setAccountId(account.getId());
+            existing.setMessage(message);
+            existing.setStatus(status);
+            existing.setMode(account.getGreetMode());
+            greetingMapper.updateById(existing);
+            return;
+        }
         GreetingRecord record = new GreetingRecord();
         record.setCandidateId(candidate.getId());
         record.setAccountId(account.getId());

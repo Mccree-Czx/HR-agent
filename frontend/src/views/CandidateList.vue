@@ -115,10 +115,10 @@ function snapshotSummary(snapshot) {
 }
 
 function greetTagType(status) {
-  return { SENT: 'primary', AGREED: 'success', REQUESTED: 'warning', PENDING_CONFIRM: 'info' }[status] || 'info'
+  return { SENT: 'primary', AGREED: 'success', REQUESTED: 'warning', PENDING_CONFIRM: 'info', SEND_FAILED: 'danger' }[status] || 'info'
 }
 function greetText(status) {
-  return { SENT: '已打招呼', AGREED: '候选人已同意', REQUESTED: '已索要简历', PENDING_CONFIRM: '待确认' }[status] || status
+  return { SENT: '已打招呼', AGREED: '候选人已同意', REQUESTED: '已索要简历', PENDING_CONFIRM: '待确认', SEND_FAILED: '发送失败' }[status] || status
 }
 
 async function runScore() {
