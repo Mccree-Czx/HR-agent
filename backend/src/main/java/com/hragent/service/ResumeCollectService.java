@@ -119,8 +119,8 @@ public class ResumeCollectService {
             if (!samePerson) {
                 continue;
             }
-            // direction=0 表示对方发来的消息(候选人回复)
-            if ("0".equals(chat.path("direction").asText(""))) {
+            // 实测:direction=1 为候选人发来的消息(如回复),direction=0 为我方/平台发出
+            if ("1".equals(chat.path("direction").asText(""))) {
                 return true;
             }
         }

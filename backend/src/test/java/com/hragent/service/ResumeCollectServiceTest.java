@@ -97,7 +97,7 @@ class ResumeCollectServiceTest {
     void checkReplyDetectsCandidateReply() throws Exception {
         when(commandService.chatlist(any(LiepinAccount.class), any(Duration.class)))
                 .thenReturn(List.of(objectMapper.readTree(
-                        "{\"user_id\":\"u1\",\"im_id\":\"im1\",\"direction\":\"0\",\"latest_msg\":\"好的\"}")));
+                        "{\"user_id\":\"u1\",\"im_id\":\"im1\",\"direction\":\"1\",\"latest_msg\":\"好的\"}")));
         assertTrue(resumeCollectService.checkReply(account, candidate, Duration.ofSeconds(5)));
     }
 
@@ -105,8 +105,8 @@ class ResumeCollectServiceTest {
     void checkReplyIgnoresOthersAndOwnMessages() throws Exception {
         when(commandService.chatlist(any(LiepinAccount.class), any(Duration.class)))
                 .thenReturn(List.of(
-                        objectMapper.readTree("{\"user_id\":\"other\",\"im_id\":\"x\",\"direction\":\"0\"}"),
-                        objectMapper.readTree("{\"user_id\":\"u1\",\"im_id\":\"im1\",\"direction\":\"1\"}")));
+                        objectMapper.readTree("{\"user_id\":\"other\",\"im_id\":\"x\",\"direction\":\"1\"}"),
+                        objectMapper.readTree("{\"user_id\":\"u1\",\"im_id\":\"im1\",\"direction\":\"0\"}")));
         assertFalse(resumeCollectService.checkReply(account, candidate, Duration.ofSeconds(5)));
     }
 
@@ -114,7 +114,7 @@ class ResumeCollectServiceTest {
     void collectOneRequestsResumeWhenReplied() throws Exception {
         when(commandService.chatlist(any(LiepinAccount.class), any(Duration.class)))
                 .thenReturn(List.of(objectMapper.readTree(
-                        "{\"user_id\":\"u1\",\"im_id\":\"im1\",\"direction\":\"0\"}")));
+                        "{\"user_id\":\"u1\",\"im_id\":\"im1\",\"direction\":\"1\"}")));
 
         resumeCollectService.collectOne(record, candidate);
 
@@ -127,7 +127,7 @@ class ResumeCollectServiceTest {
     void collectOneSkipsWhenNoReply() throws Exception {
         when(commandService.chatlist(any(LiepinAccount.class), any(Duration.class)))
                 .thenReturn(List.of(objectMapper.readTree(
-                        "{\"user_id\":\"u1\",\"im_id\":\"im1\",\"direction\":\"1\"}")));
+                        "{\"user_id\":\"u1\",\"im_id\":\"im1\",\"direction\":\"0\"}")));
 
         resumeCollectService.collectOne(record, candidate);
 
