@@ -1,0 +1,111 @@
+-- H2 测试库结构(与生产 schema.sql 对应,H2 MODE=MySQL)
+
+CREATE TABLE IF NOT EXISTS jd (
+    id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+    title         VARCHAR(200) NOT NULL,
+    external_jd   TEXT,
+    internal_notes TEXT,
+    salary_min    INT,
+    salary_max    INT,
+    status        VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+    created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS liepin_account (
+    id               BIGINT AUTO_INCREMENT PRIMARY KEY,
+    name             VARCHAR(100) NOT NULL,
+    user_data_dir    VARCHAR(500),
+    login_status     VARCHAR(20) NOT NULL DEFAULT 'NEED_SCAN',
+    circuit_breaker  TINYINT NOT NULL DEFAULT 0,
+    greet_mode       VARCHAR(20) NOT NULL DEFAULT 'AUTO',
+    daily_greet_quota INT NOT NULL DEFAULT 20,
+    created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS search_task (
+    id             BIGINT AUTO_INCREMENT PRIMARY KEY,
+    jd_id          BIGINT NOT NULL,
+    account_id     BIGINT NOT NULL,
+    keywords       VARCHAR(500),
+    status         VARCHAR(20) NOT NULL DEFAULT 'QUEUED',
+    lease_expire_at DATETIME,
+    retry_count    INT NOT NULL DEFAULT 0,
+    error_msg      VARCHAR(1000),
+    created_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS candidate (
+    id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+    resume_id     VARCHAR(100) NOT NULL,
+    name          VARCHAR(100) NOT NULL,
+    snapshot      TEXT,
+    score         INT,
+    pass_status   VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    jd_id         BIGINT,
+    created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uk_resume UNIQUE (resume_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS score_record (
+    id           BIGINT AUTO_INCREMENT PRIMARY KEY,
+    candidate_id BIGINT NOT NULL,
+    jd_id        BIGINT NOT NULL,
+    score        INT NOT NULL,
+    reason       TEXT,
+    rule_version VARCHAR(50),
+    model        VARCHAR(50),
+    token_usage  INT,
+    created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS greeting_record (
+    id           BIGINT AUTO_INCREMENT PRIMARY KEY,
+    candidate_id BIGINT NOT NULL,
+    account_id   BIGINT NOT NULL,
+    message      TEXT,
+    status       VARCHAR(20) NOT NULL DEFAULT 'SENT',
+    mode         VARCHAR(20) NOT NULL,
+    created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uk_candidate UNIQUE (candidate_id)
+);
+
+CREATE TABLE IF NOT EXISTS resume_file (
+    id           BIGINT AUTO_INCREMENT PRIMARY KEY,
+    candidate_id BIGINT NOT NULL,
+    bucket       VARCHAR(100),
+    object_key   VARCHAR(500),
+    format       VARCHAR(20),
+    size         BIGINT,
+    sha256       VARCHAR(64),
+    created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS sys_user (
+    id         BIGINT AUTO_INCREMENT PRIMARY KEY,
+    username   VARCHAR(100) NOT NULL,
+    password   VARCHAR(200) NOT NULL,
+    role       VARCHAR(20) NOT NULL DEFAULT 'HR',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uk_username UNIQUE (username)
+);
+
+CREATE TABLE IF NOT EXISTS user_jd (
+    id      BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    jd_id   BIGINT NOT NULL,
+    CONSTRAINT uk_user_jd UNIQUE (user_id, jd_id)
+);
+
+CREATE TABLE IF NOT EXISTS op_log (
+    id          BIGINT AUTO_INCREMENT PRIMARY KEY,
+    operator    VARCHAR(100),
+    action      VARCHAR(50),
+    target_type VARCHAR(50),
+    target_id   VARCHAR(50),
+    detail      TEXT,
+    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
