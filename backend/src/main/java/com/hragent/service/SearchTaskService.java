@@ -11,6 +11,7 @@ import com.hragent.entity.Jd;
 import com.hragent.entity.LiepinAccount;
 import com.hragent.entity.SearchTask;
 import com.hragent.executor.CliException;
+import com.hragent.notify.NotifyService;
 import com.hragent.repository.CandidateMapper;
 import com.hragent.repository.JdMapper;
 import com.hragent.repository.LiepinAccountMapper;
@@ -36,12 +37,13 @@ public class SearchTaskService {
     private final LiepinCommandService commandService;
     private final TaskQueueService queueService;
     private final HrAgentProperties properties;
+    private final NotifyService notifyService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public SearchTaskService(SearchTaskMapper taskMapper, JdMapper jdMapper,
                              LiepinAccountMapper accountMapper, CandidateMapper candidateMapper,
                              LiepinCommandService commandService, TaskQueueService queueService,
-                             HrAgentProperties properties) {
+                             HrAgentProperties properties, NotifyService notifyService) {
         this.taskMapper = taskMapper;
         this.jdMapper = jdMapper;
         this.accountMapper = accountMapper;
@@ -49,6 +51,7 @@ public class SearchTaskService {
         this.commandService = commandService;
         this.queueService = queueService;
         this.properties = properties;
+        this.notifyService = notifyService;
     }
 
     /** 创建搜索任务(关键词取 JD 对内寻源备注,为空则用岗位名) */
@@ -110,6 +113,14 @@ public class SearchTaskService {
         } catch (Exception e) {
             log.error("任务 {} 执行异常", task.getId(), e);
             queueService.fail(task.getId(), "执行异常: " + e.getMessage(), task.getRetryCount());
+        }
+
+        // 终态失败告警(评审 P2-14)
+        SearchTask after = taskMapper.selectById(task.getId());
+        if (after != null && "FAILED".equals(after.getStatus())) {
+            notifyService.alert("搜索任务终态失败",
+                    "任务: #" + task.getId() + " 岗位: " + task.getJdId() + " 关键词: " + task.getKeywords()
+                            + "\n原因: " + after.getErrorMsg());
         }
     }
 

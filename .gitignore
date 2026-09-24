@@ -13,6 +13,9 @@ frontend/node_modules/
 frontend/dist/
 npm-debug.log*
 
+# 前端构建产物(由 deploy/build-frontend.sh 生成,不提交)
+backend/src/main/resources/static/
+
 # OS
 .DS_Store
 

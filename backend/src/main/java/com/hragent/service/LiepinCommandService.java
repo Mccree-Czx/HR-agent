@@ -7,6 +7,7 @@ import com.hragent.executor.CliException;
 import com.hragent.executor.CliResult;
 import com.hragent.executor.JsonExtractor;
 import com.hragent.executor.LiepinCliExecutor;
+import com.hragent.notify.NotifyService;
 import com.hragent.repository.LiepinAccountMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -29,10 +30,13 @@ public class LiepinCommandService {
 
     private final LiepinCliExecutor executor;
     private final LiepinAccountMapper accountMapper;
+    private final NotifyService notifyService;
 
-    public LiepinCommandService(LiepinCliExecutor executor, LiepinAccountMapper accountMapper) {
+    public LiepinCommandService(LiepinCliExecutor executor, LiepinAccountMapper accountMapper,
+                                NotifyService notifyService) {
         this.executor = executor;
         this.accountMapper = accountMapper;
+        this.notifyService = notifyService;
     }
 
     /** 搜索人才 → 候选人数组 */
@@ -112,6 +116,9 @@ public class LiepinCommandService {
                     changed = true;
                 }
                 log.warn("账号 {} 触发熔断: {}", account.getId(), e.getMessage());
+                notifyService.alert("账号触发风控熔断",
+                        "账号: " + account.getName() + "(id=" + account.getId() + ")\n"
+                                + "原因: " + e.getMessage() + "\n处理: 停用该账号所有任务,人工确认后重置熔断标记");
             }
             case NOT_LOGGED_IN -> {
                 if (!"NEED_SCAN".equals(account.getLoginStatus())) {
@@ -119,6 +126,8 @@ public class LiepinCommandService {
                     changed = true;
                 }
                 log.warn("账号 {} 登录态失效,需扫码: {}", account.getId(), e.getMessage());
+                notifyService.alert("账号登录态失效",
+                        "账号: " + account.getName() + "(id=" + account.getId() + ")\n请在后台点击扫码登录");
             }
             case TIMEOUT, FAILED -> {
                 // 可重试类错误,不标记账号状态

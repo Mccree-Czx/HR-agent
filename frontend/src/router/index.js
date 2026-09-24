@@ -1,4 +1,4 @@
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHashHistory } from 'vue-router'
 
 const routes = [
   { path: '/login', name: 'login', component: () => import('../views/Login.vue') },
@@ -16,7 +16,8 @@ const routes = [
 ]
 
 const router = createRouter({
-  history: createWebHistory(),
+  // hash 模式:由 Spring Boot 静态托管时无需 SPA fallback 配置
+  history: createWebHashHistory(),
   routes
 })
 

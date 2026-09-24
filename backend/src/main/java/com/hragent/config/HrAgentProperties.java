@@ -22,6 +22,8 @@ public class HrAgentProperties {
 
     private Storage storage = new Storage();
 
+    private Notify notify = new Notify();
+
     @Data
     public static class Jwt {
 
@@ -108,5 +110,15 @@ public class HrAgentProperties {
 
             private String bucket = "resumes";
         }
+    }
+
+    @Data
+    public static class Notify {
+
+        /** 飞书自定义机器人 webhook(留空则仅日志告警) */
+        private String feishuWebhook = "";
+
+        /** 飞书机器人签名密钥(机器人开启加签时必填,未开启留空) */
+        private String feishuSecret = "";
     }
 }
