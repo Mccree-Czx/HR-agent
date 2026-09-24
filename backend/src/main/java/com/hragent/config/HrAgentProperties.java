@@ -16,6 +16,10 @@ public class HrAgentProperties {
 
     private Liepin liepin = new Liepin();
 
+    private Ai ai = new Ai();
+
+    private Scoring scoring = new Scoring();
+
     @Data
     public static class Jwt {
 
@@ -45,5 +49,38 @@ public class HrAgentProperties {
 
         /** 简历/打招呼等短命令超时(分钟) */
         private int shortTimeoutMinutes = 3;
+    }
+
+    @Data
+    public static class Ai {
+
+        /** OpenAI 兼容接口 baseUrl(DeepSeek/Qwen/GLM 等) */
+        private String baseUrl = "https://api.deepseek.com";
+
+        private String apiKey = "";
+
+        private String model = "deepseek-chat";
+
+        /** 单次调用超时(秒) */
+        private int timeoutSeconds = 120;
+    }
+
+    @Data
+    public static class Scoring {
+
+        /** 评分细则版本号(细则变更时更新) */
+        private String ruleVersion = "v0.1-placeholder";
+
+        /** 通过阈值(0-100) */
+        private int passThreshold = 60;
+
+        /** 评分 Agent 系统提示词文件 */
+        private String promptFile = "classpath:agents/resume-scorer.md";
+
+        /** JSON 解析失败最大重试次数 */
+        private int maxParseRetry = 2;
+
+        /** 打招呼节奏:同账号两次打招呼最小间隔(秒) */
+        private int greetIntervalSeconds = 30;
     }
 }

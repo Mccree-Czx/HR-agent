@@ -29,3 +29,8 @@ hr-agent:
     whitelist:
       - /api/auth/login
       - /error
+  ai:
+    # OpenAI 兼容接口(DeepSeek 默认;Qwen: https://dashscope.aliyuncs.com/compatible-mode/v1;GLM: https://open.bigmodel.cn/api/paas/v4)
+    base-url: ${AI_BASE_URL:https://api.deepseek.com}
+    api-key: ${AI_API_KEY:}
+    model: ${AI_MODEL:deepseek-chat}

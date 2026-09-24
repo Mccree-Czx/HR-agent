@@ -51,12 +51,15 @@ cd backend && mvn test   # H2 内存库,16 个用例覆盖 DAO/接口/权限
 | JWT_SECRET | (dev 默认值) | 生产必须修改 |
 | JWT_EXPIRE_HOURS | 12 | token 有效期 |
 | SERVER_PORT | 8080 | 后端端口 |
+| AI_BASE_URL | https://api.deepseek.com | 模型接口(OpenAI 兼容;Qwen/GLM 见 application.yml 注释) |
+| AI_API_KEY | (空) | 模型 API Key(必填,否则评分/话术不可用) |
+| AI_MODEL | deepseek-chat | 模型名 |
 
 ## 阶段进度
 
 - [x] 阶段 1:项目骨架 + 基础数据(JD/账号/用户管理、JWT 权限、审计日志、前端骨架)
-- [ ] 阶段 2:能力 spike + liepin-cli 封装与搜索
-- [ ] 阶段 3:AgentScope 评分 Agent + 打招呼
+- [x] 阶段 2:能力 spike + liepin-cli 封装与搜索(任务队列、真实搜索验证)
+- [x] 阶段 3:AgentScope 评分 Agent + 打招呼(预筛/JSON 校验重试/防重复联系/配额/节奏)
 - [ ] 阶段 4:简历入库(MinIO)+ 台账 + 权限
 - [ ] 阶段 5:集成验证与运维加固
 
