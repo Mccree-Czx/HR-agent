@@ -169,4 +169,31 @@ class SearchTaskServiceTest {
         assertEquals(1, saved, "空 resume_id/name 应跳过");
         assertEquals(1, candidateMapper.selectCount(null));
     }
+
+    @Test
+    void createRecommendTask() {
+        SearchTask task = searchTaskService.createRecommendTask(jdId, accountId);
+        assertEquals("RECOMMEND", task.getTaskType());
+        assertEquals("QUEUED", task.getStatus());
+    }
+
+    @Test
+    void executeRecommendTaskPullsRecommendations() throws Exception {
+        when(commandService.recommend(any(LiepinAccount.class), any(Duration.class)))
+                .thenReturn(List.of(objectMapper.readTree(
+                        "{\"name\":\"推荐人\",\"talentId\":\"t1\"," +
+                                "\"url\":\"https://lpt.liepin.com/cvview?resIdEncode=rec001&job_id=123\"}")));
+
+        SearchTask task = searchTaskService.createRecommendTask(jdId, accountId);
+        // 模拟调度器认领
+        taskMapper.tryClaim(task.getId(), java.time.LocalDateTime.now().plusMinutes(5));
+        searchTaskService.execute(task);
+
+        assertEquals("DONE", taskMapper.selectById(task.getId()).getStatus());
+        // 推荐数据无 resume_id,应从 url 提取 resIdEncode
+        Candidate c = candidateMapper.selectOne(
+                new LambdaQueryWrapper<Candidate>().eq(Candidate::getResumeId, "rec001"));
+        assertNotNull(c, "推荐候选人应以 url 中 resIdEncode 作为 resume_id 落库");
+        assertEquals("推荐人", c.getName());
+    }
 }

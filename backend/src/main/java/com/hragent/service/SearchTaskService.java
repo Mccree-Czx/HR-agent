@@ -71,7 +71,30 @@ public class SearchTaskService {
         SearchTask task = new SearchTask();
         task.setJdId(jdId);
         task.setAccountId(accountId);
+        task.setTaskType("SEARCH");
         task.setKeywords(keywords);
+        task.setStatus("QUEUED");
+        task.setRetryCount(0);
+        taskMapper.insert(task);
+        return task;
+    }
+
+    /** 创建平台推荐任务(拉取猎聘按已发布职位的推荐人选) */
+    @Transactional
+    public SearchTask createRecommendTask(Long jdId, Long accountId) {
+        Jd jd = jdMapper.selectById(jdId);
+        if (jd == null) {
+            throw BizException.notFound("岗位不存在");
+        }
+        LiepinAccount account = accountMapper.selectById(accountId);
+        if (account == null) {
+            throw BizException.notFound("猎聘账号不存在");
+        }
+        SearchTask task = new SearchTask();
+        task.setJdId(jdId);
+        task.setAccountId(accountId);
+        task.setTaskType("RECOMMEND");
+        task.setKeywords(jd.getTitle());
         task.setStatus("QUEUED");
         task.setRetryCount(0);
         taskMapper.insert(task);
@@ -98,12 +121,19 @@ public class SearchTaskService {
         }
 
         try {
-            Duration timeout = Duration.ofMinutes(properties.getLiepin().getSearchTimeoutMinutes());
-            List<JsonNode> candidates = commandService.search(
-                    account, task.getKeywords(), properties.getLiepin().getSearchLimit(), timeout);
+            List<JsonNode> candidates;
+            if ("RECOMMEND".equals(task.getTaskType())) {
+                // 平台推荐:拉取猎聘按已发布职位推送的推荐人选
+                candidates = commandService.recommend(
+                        account, Duration.ofMinutes(properties.getLiepin().getShortTimeoutMinutes()));
+            } else {
+                Duration timeout = Duration.ofMinutes(properties.getLiepin().getSearchTimeoutMinutes());
+                candidates = commandService.search(
+                        account, task.getKeywords(), properties.getLiepin().getSearchLimit(), timeout);
+            }
             int saved = saveCandidates(task.getJdId(), candidates);
             queueService.complete(task.getId());
-            log.info("任务 {} 完成:搜索 {} 条,落库/更新 {} 条", task.getId(), candidates.size(), saved);
+            log.info("任务 {} 完成:{} 条候选人,落库/更新 {} 条", task.getId(), candidates.size(), saved);
         } catch (CliException e) {
             if (e.getType() == CliException.Type.RISK_CONTROL) {
                 // 账号已熔断,任务无重试意义 → 终态失败
@@ -125,12 +155,12 @@ public class SearchTaskService {
         }
     }
 
-    /** 候选人落库:按 (resume_id, name) 去重,存在则更新快照 */
+    /** 候选人落库:按 (resume_id, name) 去重,存在则更新快照;兼容平台推荐数据 */
     @Transactional
     public int saveCandidates(Long jdId, List<JsonNode> nodes) {
         int saved = 0;
         for (JsonNode node : nodes) {
-            String resumeId = node.path("resume_id").asText("");
+            String resumeId = extractResumeId(node);
             String name = node.path("name").asText("");
             if (resumeId.isBlank() || name.isBlank()) {
                 continue;
@@ -153,6 +183,24 @@ public class SearchTaskService {
             saved++;
         }
         return saved;
+    }
+
+    /**
+     * 提取简历 ID:
+     * - 搜索数据:resume_id 字段
+     * - 平台推荐数据:url 中的 resIdEncode 参数,缺失时回退 talentId
+     */
+    private String extractResumeId(JsonNode node) {
+        String resumeId = node.path("resume_id").asText("");
+        if (!resumeId.isBlank()) {
+            return resumeId;
+        }
+        String url = node.path("url").asText("");
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("resIdEncode=([^&]+)").matcher(url);
+        if (m.find()) {
+            return m.group(1);
+        }
+        return node.path("talentId").asText("");
     }
 
     private String toJson(JsonNode node) {

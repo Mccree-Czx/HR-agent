@@ -18,6 +18,9 @@ public class SearchTask {
 
     private Long accountId;
 
+    /** SEARCH=主动搜索 / RECOMMEND=平台推荐 */
+    private String taskType;
+
     private String keywords;
 
     private String status;

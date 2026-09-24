@@ -12,6 +12,7 @@
       <el-button type="primary" :disabled="!selectedJdId" @click="runScore">批量评分(10人)</el-button>
       <el-button type="success" :disabled="!selectedJdId" @click="runGreet">批量打招呼(10人)</el-button>
       <el-button :disabled="!selectedJdId" @click="runCollect">检测回复并索要简历</el-button>
+      <el-button type="warning" :disabled="!selectedJdId" :loading="recommendLoading" @click="runRecommend">拉取平台推荐</el-button>
     </div>
 
     <el-table :data="rows" v-loading="loading" border>
@@ -69,7 +70,7 @@
 <script setup>
 import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { jdApi, candidateApi, recruitApi } from '../api/modules'
+import { jdApi, candidateApi, recruitApi, searchTaskApi } from '../api/modules'
 
 const rows = ref([])
 const jds = ref([])
@@ -143,6 +144,19 @@ async function redo(candidateId) {
   await recruitApi.redo(candidateId)
   ElMessage.success('已重新打分')
   load()
+}
+
+const recommendLoading = ref(false)
+
+async function runRecommend() {
+  recommendLoading.value = true
+  try {
+    await searchTaskApi.createRecommend({ jdId: selectedJdId.value, accountId: 1 })
+    await searchTaskApi.tick()
+    ElMessage.success('平台推荐任务已入队,稍后刷新查看候选人')
+  } finally {
+    recommendLoading.value = false
+  }
 }
 
 onMounted(async () => {

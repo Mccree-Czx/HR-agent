@@ -44,6 +44,13 @@ export const recruitApi = {
   collect: (data) => http.post('/recruit/collect', data)
 }
 
+export const searchTaskApi = {
+  create: (data) => http.post('/search-task', data),
+  createRecommend: (data) => http.post('/search-task/recommend', data),
+  page: (params) => http.get('/search-task', { params }),
+  tick: () => http.post('/search-task/tick')
+}
+
 export const userJdApi = {
   list: (userId) => http.get(`/user/${userId}/jd`),
   assign: (userId, jdId) => http.post(`/user/${userId}/jd/${jdId}`),

@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS search_task (
     id             BIGINT AUTO_INCREMENT PRIMARY KEY,
     jd_id          BIGINT NOT NULL,
     account_id     BIGINT NOT NULL,
+    task_type      VARCHAR(20) NOT NULL DEFAULT 'SEARCH',
     keywords       VARCHAR(500),
     status         VARCHAR(20) NOT NULL DEFAULT 'QUEUED',
     lease_expire_at DATETIME,

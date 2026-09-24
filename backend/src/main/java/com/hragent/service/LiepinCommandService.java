@@ -58,6 +58,19 @@ public class LiepinCommandService {
         return JsonExtractor.parse(result.stdout());
     }
 
+    /** 平台推荐候选人 → 数组(依赖猎聘上已发布的职位) */
+    public List<JsonNode> recommend(LiepinAccount account, Duration timeout) {
+        CliResult result = run(account, timeout, "recommend", "--json");
+        JsonNode node = JsonExtractor.parse(result.stdout())
+                .orElseThrow(() -> BizException.badRequest("recommend 输出无有效 JSON"));
+        if (!node.isArray()) {
+            throw BizException.badRequest("recommend 输出不是数组: " + truncate(result.stdout()));
+        }
+        List<JsonNode> list = new ArrayList<>();
+        node.forEach(list::add);
+        return list;
+    }
+
     /** 聊天列表 → 数组(同意状态检测依据) */
     public List<JsonNode> chatlist(LiepinAccount account, Duration timeout) {
         CliResult result = run(account, timeout, "chatlist", "--json");

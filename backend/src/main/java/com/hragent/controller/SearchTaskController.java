@@ -40,6 +40,12 @@ public class SearchTaskController {
         return ApiResponse.ok(searchTaskService.createTask(request.getJdId(), request.getAccountId()));
     }
 
+    /** 创建平台推荐任务(拉取猎聘按已发布职位的推荐人选,入队) */
+    @PostMapping("/recommend")
+    public ApiResponse<SearchTask> createRecommend(@Valid @RequestBody CreateSearchTaskRequest request) {
+        return ApiResponse.ok(searchTaskService.createRecommendTask(request.getJdId(), request.getAccountId()));
+    }
+
     /** 任务列表 */
     @GetMapping
     public ApiResponse<IPage<SearchTask>> page(@RequestParam(defaultValue = "1") int pageNo,
