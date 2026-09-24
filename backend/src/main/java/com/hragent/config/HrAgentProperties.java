@@ -54,8 +54,8 @@ public class HrAgentProperties {
         /** 简历/打招呼等短命令超时(分钟) */
         private int shortTimeoutMinutes = 3;
 
-        /** 单次搜索返回候选人上限 */
-        private int searchLimit = 200;
+        /** 单次搜索返回候选人上限(实测翻页 200 会触发风控安全验证,50 为安全区间) */
+        private int searchLimit = 50;
     }
 
     @Data
