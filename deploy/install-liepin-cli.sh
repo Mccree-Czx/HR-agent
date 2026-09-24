@@ -22,7 +22,14 @@ else
     echo "[2/3] 使用默认分支最新 commit"
     echo "      (生产建议:fork 后以 commit 固定安装,如 sh install-liepin-cli.sh <fork-url> <commit>)"
 fi
-echo "[3/3] npm install -g"
-npm install -g "$TMP_DIR"
+echo "[3/5] npm install(构建依赖)"
+cd "$TMP_DIR"
+npm install --silent
+echo "[4/5] npm run build(tsc 生成 dist)"
+npm run build
+echo "[5/5] npm pack + 全局安装(tarball 方式,避免目录符号链接)"
+TARBALL="$(npm pack --silent | tail -1)"
+npm install -g "$TMP_DIR/$TARBALL"
+cd - >/dev/null
 rm -rf "$TMP_DIR"
 echo "[OK] liepin-cli 安装完成,验证: liepin help"
