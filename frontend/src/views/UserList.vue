@@ -14,8 +14,9 @@
         </template>
       </el-table-column>
       <el-table-column prop="createdAt" label="创建时间" width="180" />
-      <el-table-column label="操作" width="200" fixed="right">
+      <el-table-column label="操作" width="260" fixed="right">
         <template #default="{ row }">
+          <el-button link type="primary" @click="openJdAssign(row)">分配岗位</el-button>
           <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
           <el-button link type="danger" :disabled="row.username === username" @click="handleDelete(row)">删除</el-button>
         </template>
@@ -50,13 +51,23 @@
         <el-button type="primary" :loading="saving" @click="handleSave">保存</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="jdDialogVisible" title="分配岗位" width="480px">
+      <el-checkbox-group v-model="assignedJdIds">
+        <el-checkbox v-for="jd in allJds" :key="jd.id" :value="jd.id">{{ jd.title }}</el-checkbox>
+      </el-checkbox-group>
+      <template #footer>
+        <el-button @click="jdDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="handleSaveJd">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { userApi } from '../api/modules'
+import { userApi, userJdApi, jdApi } from '../api/modules'
 
 const rows = ref([])
 const total = ref(0)
@@ -118,6 +129,41 @@ async function handleDelete(row) {
   await userApi.remove(row.id)
   ElMessage.success('已删除')
   load(pageNo.value)
+}
+
+const jdDialogVisible = ref(false)
+const allJds = ref([])
+const assignedJdIds = ref([])
+const assigningUserId = ref(null)
+
+async function openJdAssign(row) {
+  assigningUserId.value = row.id
+  const [jdRes, assignedRes] = await Promise.all([
+    jdApi.page({ pageNo: 1, pageSize: 200 }),
+    userJdApi.list(row.id)
+  ])
+  allJds.value = jdRes.data.records
+  assignedJdIds.value = assignedRes.data.map((u) => u.jdId)
+  jdDialogVisible.value = true
+}
+
+async function handleSaveJd() {
+  saving.value = true
+  try {
+    const before = (await userJdApi.list(assigningUserId.value)).data.map((u) => u.jdId)
+    const toAdd = assignedJdIds.value.filter((id) => !before.includes(id))
+    const toRemove = before.filter((id) => !assignedJdIds.value.includes(id))
+    for (const jdId of toAdd) {
+      await userJdApi.assign(assigningUserId.value, jdId)
+    }
+    for (const jdId of toRemove) {
+      await userJdApi.unassign(assigningUserId.value, jdId)
+    }
+    ElMessage.success('岗位分配已更新')
+    jdDialogVisible.value = false
+  } finally {
+    saving.value = false
+  }
 }
 
 onMounted(() => load())

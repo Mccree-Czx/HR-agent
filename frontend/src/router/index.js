@@ -8,6 +8,7 @@ const routes = [
     redirect: '/jd',
     children: [
       { path: 'jd', name: 'jd', component: () => import('../views/JdList.vue'), meta: { title: '岗位管理' } },
+      { path: 'candidate', name: 'candidate', component: () => import('../views/CandidateList.vue'), meta: { title: '候选人台账' } },
       { path: 'account', name: 'account', component: () => import('../views/AccountList.vue'), meta: { title: '账号管理' } },
       { path: 'user', name: 'user', component: () => import('../views/UserList.vue'), meta: { title: '用户管理', adminOnly: true } }
     ]

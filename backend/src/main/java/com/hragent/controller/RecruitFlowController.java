@@ -7,6 +7,7 @@ import com.hragent.entity.Candidate;
 import com.hragent.repository.CandidateMapper;
 import com.hragent.scoring.ScoringEngine;
 import com.hragent.service.GreetingService;
+import com.hragent.service.ResumeCollectService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -25,12 +26,15 @@ public class RecruitFlowController {
 
     private final ScoringEngine scoringEngine;
     private final GreetingService greetingService;
+    private final ResumeCollectService resumeCollectService;
     private final CandidateMapper candidateMapper;
 
     public RecruitFlowController(ScoringEngine scoringEngine, GreetingService greetingService,
+                                 ResumeCollectService resumeCollectService,
                                  CandidateMapper candidateMapper) {
         this.scoringEngine = scoringEngine;
         this.greetingService = greetingService;
+        this.resumeCollectService = resumeCollectService;
         this.candidateMapper = candidateMapper;
     }
 
@@ -68,6 +72,15 @@ public class RecruitFlowController {
         int created = greetingService.greetPassed(request.getJdId(), request.getLimit());
         Map<String, Object> result = new HashMap<>();
         result.put("greeted", created);
+        return ApiResponse.ok(result);
+    }
+
+    /** 简历收集:检测候选人回复并索要简历(上限 limit) */
+    @PostMapping("/collect")
+    public ApiResponse<Map<String, Object>> collect(@Valid @RequestBody RecruitRunRequest request) {
+        int processed = resumeCollectService.collectForJd(request.getJdId(), request.getLimit());
+        Map<String, Object> result = new HashMap<>();
+        result.put("processed", processed);
         return ApiResponse.ok(result);
     }
 }

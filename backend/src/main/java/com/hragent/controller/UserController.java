@@ -4,7 +4,9 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.hragent.common.ApiResponse;
 import com.hragent.dto.CreateUserRequest;
 import com.hragent.entity.SysUser;
+import com.hragent.entity.UserJd;
 import com.hragent.security.RequireRole;
+import com.hragent.service.UserJdService;
 import com.hragent.service.UserService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -23,9 +25,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class UserController {
 
     private final UserService userService;
+    private final UserJdService userJdService;
 
-    public UserController(UserService userService) {
+    public UserController(UserService userService, UserJdService userJdService) {
         this.userService = userService;
+        this.userJdService = userJdService;
     }
 
     @GetMapping
@@ -47,6 +51,26 @@ public class UserController {
     @DeleteMapping("/{id}")
     public ApiResponse<Void> delete(@PathVariable Long id) {
         userService.delete(id);
+        return ApiResponse.ok(null);
+    }
+
+    /** 查询用户已分配岗位 */
+    @GetMapping("/{id}/jd")
+    public ApiResponse<java.util.List<UserJd>> listJd(@PathVariable Long id) {
+        return ApiResponse.ok(userJdService.listByUser(id));
+    }
+
+    /** 分配岗位 */
+    @PostMapping("/{id}/jd/{jdId}")
+    public ApiResponse<Void> assignJd(@PathVariable Long id, @PathVariable Long jdId) {
+        userJdService.assign(id, jdId);
+        return ApiResponse.ok(null);
+    }
+
+    /** 取消岗位分配 */
+    @DeleteMapping("/{id}/jd/{jdId}")
+    public ApiResponse<Void> unassignJd(@PathVariable Long id, @PathVariable Long jdId) {
+        userJdService.unassign(id, jdId);
         return ApiResponse.ok(null);
     }
 }

@@ -4,6 +4,7 @@
       <div class="logo">HR Agent</div>
       <el-menu :default-active="$route.path" router background-color="#001529" text-color="#a6adb4" active-text-color="#fff">
         <el-menu-item index="/jd">岗位管理</el-menu-item>
+        <el-menu-item index="/candidate">候选人台账</el-menu-item>
         <el-menu-item index="/account">账号管理</el-menu-item>
         <el-menu-item v-if="isAdmin" index="/user">用户管理</el-menu-item>
       </el-menu>

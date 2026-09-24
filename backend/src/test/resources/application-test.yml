@@ -14,6 +14,9 @@ hr-agent:
     enabled: false
   scoring:
     greet-interval-seconds: 0
+  storage:
+    type: local
+    local-base-dir: target/test-resumes
   jwt:
     secret: test-secret-key-for-unit-tests-only-1234567890
     expire-hours: 1

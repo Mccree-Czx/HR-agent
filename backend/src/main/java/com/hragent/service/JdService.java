@@ -6,24 +6,38 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.hragent.common.BizException;
 import com.hragent.entity.Jd;
 import com.hragent.repository.JdMapper;
+import com.hragent.security.UserContext;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.util.Set;
 
 @Service
 public class JdService {
 
     private final JdMapper jdMapper;
     private final OpLogService opLogService;
+    private final UserJdService userJdService;
 
-    public JdService(JdMapper jdMapper, OpLogService opLogService) {
+    public JdService(JdMapper jdMapper, OpLogService opLogService, UserJdService userJdService) {
         this.jdMapper = jdMapper;
         this.opLogService = opLogService;
+        this.userJdService = userJdService;
     }
 
     public IPage<Jd> page(int pageNo, int pageSize, String status) {
         LambdaQueryWrapper<Jd> qw = new LambdaQueryWrapper<Jd>()
                 .eq(status != null && !status.isBlank(), Jd::getStatus, status)
                 .orderByDesc(Jd::getId);
+        // 权限:非 ADMIN 只可见被分配岗位(评审 P1-8)
+        Set<Long> allowed = userJdService.allowedJdIds(
+                UserContext.get().getUserId(), UserContext.get().getRole());
+        if (allowed != null) {
+            qw.in(allowed.isEmpty(), Jd::getId, -1L);
+            if (!allowed.isEmpty()) {
+                qw.in(Jd::getId, allowed);
+            }
+        }
         return jdMapper.selectPage(new Page<>(pageNo, pageSize), qw);
     }
 

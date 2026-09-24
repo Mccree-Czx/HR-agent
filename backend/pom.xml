@@ -59,6 +59,13 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- 对象存储:MinIO(S3 兼容) -->
+        <dependency>
+            <groupId>io.minio</groupId>
+            <artifactId>minio</artifactId>
+            <version>8.5.14</version>
+        </dependency>
+
         <!-- 密码加密(BCrypt) -->
         <dependency>
             <groupId>org.springframework.security</groupId>

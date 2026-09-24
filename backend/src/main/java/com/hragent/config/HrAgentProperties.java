@@ -20,6 +20,8 @@ public class HrAgentProperties {
 
     private Scoring scoring = new Scoring();
 
+    private Storage storage = new Storage();
+
     @Data
     public static class Jwt {
 
@@ -82,5 +84,29 @@ public class HrAgentProperties {
 
         /** 打招呼节奏:同账号两次打招呼最小间隔(秒) */
         private int greetIntervalSeconds = 30;
+    }
+
+    @Data
+    public static class Storage {
+
+        /** 存储实现类型:minio(默认)/local */
+        private String type = "minio";
+
+        /** 本地存储根目录(type=local 时生效) */
+        private String localBaseDir = System.getProperty("user.home") + "/hr-agent/resumes";
+
+        private Minio minio = new Minio();
+
+        @Data
+        public static class Minio {
+
+            private String endpoint = "http://localhost:9000";
+
+            private String accessKey = "hr-agent-minio";
+
+            private String secretKey = "hr-agent-minio-pass";
+
+            private String bucket = "resumes";
+        }
     }
 }

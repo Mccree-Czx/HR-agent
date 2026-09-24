@@ -22,8 +22,9 @@
           <el-tag v-else type="success">正常</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="200" fixed="right">
+      <el-table-column label="操作" width="260" fixed="right">
         <template #default="{ row }">
+          <el-button link type="warning" :loading="row._loginLoading" @click="handleLogin(row)">扫码登录</el-button>
           <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
           <el-button link type="danger" @click="handleDelete(row)">删除</el-button>
         </template>
@@ -135,6 +136,33 @@ async function handleDelete(row) {
   await accountApi.remove(row.id)
   ElMessage.success('已删除')
   load(pageNo.value)
+}
+
+async function handleLogin(row) {
+  row._loginLoading = true
+  try {
+    await accountApi.login(row.id)
+    ElMessage.info('浏览器窗口已弹出,请在本机完成扫码(最长 3 分钟)')
+    // 轮询登录状态直到完成
+    for (let i = 0; i < 40; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 5000))
+      const res = await accountApi.loginStatus(row.id)
+      row.loginStatus = res.data.loginStatus
+      if (!res.data.loggingIn) {
+        break
+      }
+    }
+    const finalRes = await accountApi.loginStatus(row.id)
+    row.loginStatus = finalRes.data.loginStatus
+    if (row.loginStatus === 'NORMAL') {
+      ElMessage.success('登录成功')
+    } else {
+      ElMessage.warning('登录未完成(超时或取消)')
+    }
+    load(pageNo.value)
+  } finally {
+    row._loginLoading = false
+  }
 }
 
 onMounted(() => load())
