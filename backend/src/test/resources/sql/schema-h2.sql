@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS liepin_account (
     login_status     VARCHAR(20) NOT NULL DEFAULT 'NEED_SCAN',
     circuit_breaker  TINYINT NOT NULL DEFAULT 0,
     greet_mode       VARCHAR(20) NOT NULL DEFAULT 'AUTO',
-    daily_greet_quota INT NOT NULL DEFAULT 20,
+    daily_greet_quota INT NOT NULL DEFAULT 50,
     created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

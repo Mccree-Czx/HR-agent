@@ -39,7 +39,8 @@ public class AccountService {
         account.setLoginStatus("NEED_SCAN");
         account.setCircuitBreaker(false);
         account.setGreetMode("AUTO");
-        account.setDailyGreetQuota(20);
+        // 默认配额 50:猎聘开聊权益约 100 点/天,预留安全余量
+        account.setDailyGreetQuota(50);
         accountMapper.insert(account);
         opLogService.log("CREATE", "account", account.getId(), "新增猎聘账号: " + account.getName());
         return get(account.getId());

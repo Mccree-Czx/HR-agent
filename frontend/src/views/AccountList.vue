@@ -55,6 +55,7 @@
         </el-form-item>
         <el-form-item label="每日打招呼配额">
           <el-input-number v-model="form.dailyGreetQuota" :min="1" :max="100" />
+          <span class="field-hint">猎聘开聊权益约 100 点/天(以「我的权益」为准);单账号建议 ≤80 留余量</span>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -78,7 +79,7 @@ const loading = ref(false)
 const saving = ref(false)
 const dialogVisible = ref(false)
 const editingId = ref(null)
-const form = reactive({ name: '', userDataDir: '', greetMode: 'AUTO', dailyGreetQuota: 20 })
+const form = reactive({ name: '', userDataDir: '', greetMode: 'AUTO', dailyGreetQuota: 50 })
 
 function statusType(status) {
   return status === 'NORMAL' ? 'success' : status === 'RESTRICTED' ? 'danger' : 'warning'
@@ -101,7 +102,7 @@ async function load(page = 1) {
 
 function openCreate() {
   editingId.value = null
-  Object.assign(form, { name: '', userDataDir: '', greetMode: 'AUTO', dailyGreetQuota: 20 })
+  Object.assign(form, { name: '', userDataDir: '', greetMode: 'AUTO', dailyGreetQuota: 50 })
   dialogVisible.value = true
 }
 
@@ -175,5 +176,10 @@ onMounted(() => load())
 .pagination {
   margin-top: 12px;
   justify-content: flex-end;
+}
+.field-hint {
+  margin-left: 8px;
+  color: #999;
+  font-size: 12px;
 }
 </style>
