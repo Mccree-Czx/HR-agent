@@ -4,13 +4,20 @@
 
 import { Page } from 'puppeteer-core';
 import { LIEPIN_LPT_API, navigateToLpt, lptFetch, readLptImId } from '../common/lpt-utils.js';
+import { chatPageResult, payloadEvidence, redactDisplayText, redactMetadata } from './chatmsg.js';
 
 export interface ChatlistOptions {
   limit?: number;
+  page?: number;
+  withMeta?: boolean | string;
 }
 
-export async function chatlist(page: Page, options: ChatlistOptions): Promise<any[]> {
-  const { limit = 30 } = options;
+export async function chatlist(page: Page, options: ChatlistOptions): Promise<any> {
+  const { limit = 30, page: pageNum = 1 } = options;
+  if (!Number.isSafeInteger(Number(pageNum)) || Number(pageNum) < 1) throw new Error('page 页码必须为正整数');
+  if (!Number.isInteger(Number(limit)) || Number(limit) < 1 || Number(limit) > 100) {
+    throw new Error('limit 必须为 1-100 的整数');
+  }
 
   // 落到 LPT 同源页面拿 cookie/imId（IM 数据走 api-lpt 接口，不依赖页面 DOM）；
   // 旧 /im 路由已被猎聘改版删除会 404，改用有效路由 /recommend
@@ -23,22 +30,20 @@ export async function chatlist(page: Page, options: ChatlistOptions): Promise<an
   }
 
   // 获取聊天列表
-  const body = `imUserType=2&imId=${encodeURIComponent(imId)}&imApp=1&pageSize=${limit}&curPage=0`;
+  const body = `imUserType=2&imId=${encodeURIComponent(imId)}&imApp=1&pageSize=${Number(limit)}&curPage=${Number(pageNum) - 1}`;
   const data = await lptFetch(page, `${LIEPIN_LPT_API}/api/com.liepin.im.b.contact.get-contact-list`, { 
     body, 
     clientId: '40342' 
   });
 
   if (data.flag !== 1) {
-    throw new Error(`获取聊天列表失败: ${JSON.stringify(data).slice(0, 200)}`);
+    throw new Error('获取聊天列表失败，未返回有效数据');
   }
 
-  const contacts = data.data?.list || [];
-  if (contacts.length === 0) {
-    return [];
-  }
+  if (!Array.isArray(data.data?.list)) throw new Error('聊天列表响应缺少 list 数组');
+  const contacts = data.data.list;
 
-  return contacts.slice(0, limit).map((c: any) => {
+  const items = contacts.slice(0, Number(limit)).map((c: any) => {
     // 解析最后消息
     let latestMsg = '';
     try {
@@ -51,7 +56,14 @@ export async function chatlist(page: Page, options: ChatlistOptions): Promise<an
     const ts = c.latestMsgTime ? new Date(c.latestMsgTime) : null;
     const timeStr = ts ? `${ts.getFullYear()}-${String(ts.getMonth() + 1).padStart(2, '0')}-${String(ts.getDate()).padStart(2, '0')} ${String(ts.getHours()).padStart(2, '0')}:${String(ts.getMinutes()).padStart(2, '0')}` : '';
 
+    const lastPayload = payloadEvidence(c.lastPayload);
+    const { lastPayload: _lastPayload, ...metadata } = c;
     return {
+      last_payload: lastPayload.value,
+      payload_status: lastPayload.status,
+      raw_metadata: redactMetadata(metadata),
+      job_association: 'unknown',
+      attachment_status: 'unverified',
       name: c.name || '',
       sex: c.sex || '',
       experience: c.workage ? `${c.workage}年` : '',
@@ -59,7 +71,7 @@ export async function chatlist(page: Page, options: ChatlistOptions): Promise<an
       city: c.dq || '',
       current_company: c.company || '',
       current_title: c.title || '',
-      latest_msg: latestMsg,
+      latest_msg: redactDisplayText(latestMsg),
       latest_msg_time: timeStr,
       unread_count: String(c.unReadCnt || 0),
       direction: String(c.direction ?? ''),
@@ -68,6 +80,7 @@ export async function chatlist(page: Page, options: ChatlistOptions): Promise<an
       user_id: String(c.oppositeUserId || ''),
     };
   });
+  return chatPageResult(items, data.data, { curPage: Number(pageNum) - 1, pageSize: Number(limit) }, options.withMeta);
 }
 
 /** 聊天列表命令定义 */
@@ -76,6 +89,8 @@ export const chatlistCommand = {
   description: '查看聊天列表（招聘端）',
   args: [
     { name: 'limit', type: 'int', default: 30, help: '返回条数（1-100）' },
+    { name: 'page', type: 'int', default: 1, help: '页码（1-based，透传 curPage）；真实分页效果未验证' },
+    { name: 'withMeta', type: 'boolean', default: false, help: '输出 items 和分页证据；不会自动翻页' },
   ],
   columns: [
     { header: '姓名', key: 'name', width: 10 },

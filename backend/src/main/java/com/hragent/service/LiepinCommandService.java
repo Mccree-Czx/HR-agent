@@ -59,8 +59,11 @@ public class LiepinCommandService {
     }
 
     /** 平台推荐候选人 → 数组(依赖猎聘上已发布的职位) */
-    public List<JsonNode> recommend(LiepinAccount account, Duration timeout) {
-        CliResult result = run(account, timeout, "recommend", "--json");
+    public List<JsonNode> recommend(LiepinAccount account, String jobId, Duration timeout) {
+        if (jobId == null || !jobId.matches("[1-9][0-9]*")) {
+            throw BizException.badRequest("推荐必须指定有效的猎聘岗位 ID");
+        }
+        CliResult result = run(account, timeout, "recommend", "--jobId", jobId, "--json");
         JsonNode node = JsonExtractor.parse(result.stdout())
                 .orElseThrow(() -> BizException.badRequest("recommend 输出无有效 JSON"));
         if (!node.isArray()) {
@@ -122,8 +125,11 @@ public class LiepinCommandService {
     }
 
     /** 索要简历(需先 greet 建立会话)→ 输出对象 */
-    public Optional<JsonNode> requestResume(LiepinAccount account, String imId, Duration timeout) {
-        CliResult result = run(account, timeout, "request-resume", imId, "--json");
+    public Optional<JsonNode> requestResume(LiepinAccount account, String resumeId, Duration timeout) {
+        if (resumeId == null || resumeId.isBlank()) {
+            throw BizException.badRequest("索要简历必须提供 resume_id，不能使用 im_id");
+        }
+        CliResult result = run(account, timeout, "request-resume", resumeId, "--json");
         return JsonExtractor.parse(result.stdout());
     }
 

@@ -68,6 +68,7 @@ class SearchTaskServiceTest {
 
         Jd jd = new Jd();
         jd.setTitle("Java 后端工程师");
+        jd.setLiepinJobId("123");
         jd.setInternalNotes("java springboot 微服务");
         jdMapper.insert(jd);
         jdId = jd.getId();
@@ -179,7 +180,7 @@ class SearchTaskServiceTest {
 
     @Test
     void executeRecommendTaskPullsRecommendations() throws Exception {
-        when(commandService.recommend(any(LiepinAccount.class), any(Duration.class)))
+        when(commandService.recommend(any(LiepinAccount.class), org.mockito.ArgumentMatchers.eq("123"), any(Duration.class)))
                 .thenReturn(List.of(objectMapper.readTree(
                         "{\"name\":\"推荐人\",\"talentId\":\"t1\"," +
                                 "\"url\":\"https://lpt.liepin.com/cvview?resIdEncode=rec001&job_id=123\"}")));

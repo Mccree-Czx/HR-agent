@@ -12,6 +12,72 @@ import { LIEPIN_LPT_API, lptFetch, navigateToLpt } from '../common/lpt-utils.js'
 
 export interface ResumeOptions {
   talentId: string;
+  targetTitle?: string;
+}
+
+export interface ExpectationEntry {
+  title: string;
+  // 仅供离线验证：人工核实并归一化的职能，不是猜测的平台字段或编码。
+  reviewedFamily?: 'hardware' | 'hr' | 'software';
+  categorySource?: string;
+}
+
+export interface ExpectationEvidence {
+  source: string;
+  entries: ExpectationEntry[];
+  malformed?: boolean;
+  category_status?: 'unverified';
+}
+
+const EXPECTATION_SOURCE = 'resumeDetailVo.jobWant.jobTitleNames';
+// 明确同义映射，不按“工程师”、行业或关键词包含关系泛化。
+const TITLE_FAMILIES = new Map<string, string>([
+  ['硬件工程师', 'hardware'], ['硬件研发工程师', 'hardware'], ['高级硬件工程师', 'hardware'],
+  ['高级硬件研发工程师', 'hardware'],
+  ['人力资源总监', 'hr'], ['HR总监', 'hr'], ['招聘经理', 'hr'],
+  ['软件工程师', 'software'],
+]);
+
+export function extractJobExpectations(vo: any): ExpectationEvidence {
+  const titles = vo?.jobWant?.jobTitleNames;
+  const validArray = Array.isArray(titles);
+  return {
+    source: EXPECTATION_SOURCE,
+    entries: validArray ? titles.filter((title: unknown) => typeof title === 'string' && title.trim())
+      .map((title: string) => ({ title })) : [],
+    malformed: (titles != null && !validArray) || (validArray && titles.some((title: unknown) => typeof title !== 'string' || !title.trim())),
+    category_status: 'unverified',
+  };
+}
+
+/** 第一阶段验证工具：不接入评分/发送流程，匹配不等于可外发。 */
+export function matchJobExpectations(evidence: ExpectationEvidence, target: ExpectationEntry) {
+  const result = (status: 'match' | 'mismatch' | 'unknown', reason: string) => ({
+    status, reason, can_continue_scoring: status === 'match', can_send: false,
+    mapping_version: 'explicit-title-alias-v1',
+  });
+  if (evidence?.source !== EXPECTATION_SOURCE || evidence.malformed || !Array.isArray(evidence.entries) || !evidence.entries.length) {
+    return result('unknown', '缺少可靠的求职期望或字段格式异常');
+  }
+  const classify = (entry: ExpectationEntry) => {
+    const alias = TITLE_FAMILIES.get(typeof entry?.title === 'string' ? entry.title.trim() : '');
+    const category = entry?.reviewedFamily;
+    if (category && (!entry.categorySource?.trim() || !['hardware', 'hr', 'software'].includes(category))) {
+      return { family: undefined, conflict: true };
+    }
+    return { family: category || alias, conflict: Boolean(category && alias && category !== alias) };
+  };
+  const wanted = classify(target);
+  const entries = evidence.entries.map(classify);
+  if (wanted.conflict || entries.some(entry => entry.conflict)) {
+    return result('unknown', '职能分类证据缺失或与明确职位映射冲突');
+  }
+  if (!wanted.family) return result('unknown', '目标岗位职能尚无可靠映射');
+  if (entries.some(entry => entry.family === wanted.family)) {
+    return result('match', '至少一个明确期望方向同职能；级别、管理职责及岗位门槛仍需评分');
+  }
+  if (entries.some(entry => !entry.family)) return result('unknown', '存在无法确定职能的期望方向');
+  return result('mismatch', '所有明确期望方向均与目标岗位不同职能');
 }
 
 function joinLines(items: any[], fmt: (it: any) => string): string {
@@ -54,8 +120,11 @@ export async function resume(page: Page, options: ResumeOptions): Promise<any> {
 
   const base = vo.baseInfo || {};
   const want = vo.jobWant || {};
+  const expectationEvidence = extractJobExpectations(vo);
 
   return {
+    expectation_evidence: expectationEvidence,
+    expectation_match: matchJobExpectations(expectationEvidence, { title: options.targetTitle || '' }),
     name: base.name || '',
     title: base.title || '',
     sex: base.sexName || '',
@@ -69,7 +138,7 @@ export async function resume(page: Page, options: ResumeOptions): Promise<any> {
     online_status: vo.onlineDesc || '',
     want_salary: want.salaryShow || base.salaryShow || '',
     want_city: (want.dqNames || []).join('、'),
-    want_title: (want.jobTitleNames || []).join('、'),
+    want_title: expectationEvidence.entries.map(entry => entry.title).join('、'),
     want_industry: (want.industryNames || []).join('、'),
     self_descr: vo.selfDescr || '',
     skills: (vo.credentialNames || []).join('、'),
@@ -90,6 +159,7 @@ export const resumeCommand = {
   description: '查看简历详情（招聘者端，传 search 返回的 resume_id）',
   args: [
     { name: 'talentId', type: 'string', required: true, positional: true, help: '简历 ID（resIdEncode，来自 search 结果）' },
+    { name: 'targetTitle', type: 'string', default: '', help: '只读验证期望职能的目标职位名称，不触发评分或外发' },
   ],
   columns: [
     { header: '字段', key: 'field', width: 15 },

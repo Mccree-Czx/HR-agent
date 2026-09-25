@@ -97,7 +97,7 @@ public class ResumeCollectService {
         // 2. 有回复且未索要过 → 索要简历
         if (replied && !"REQUESTED".equals(record.getStatus()) && !"AGREED".equals(record.getStatus())) {
             requestResume(account, candidate, record, timeout);
-            log.info("候选人 {} 已回复,已发起索要简历", candidate.getId());
+            log.info("候选人 {} 已回复,索要处理状态: {}", candidate.getId(), record.getStatus());
         } else if (replied) {
             log.info("候选人 {} 已回复(已索要过简历,等待对方同意)", candidate.getId());
         } else {
@@ -130,21 +130,21 @@ public class ResumeCollectService {
     /** 索要简历并更新打招呼记录状态 */
     private void requestResume(LiepinAccount account, Candidate candidate,
                                GreetingRecord record, Duration timeout) {
-        String imId = resolveImId(candidate);
-        if (imId.isBlank()) {
-            log.warn("候选人 {} 缺少 im_id,无法索要简历", candidate.getId());
+        String resumeId = candidate.getResumeId();
+        if (resumeId == null || resumeId.isBlank()) {
+            log.warn("候选人 {} 缺少 resume_id,无法索要简历", candidate.getId());
             return;
         }
-        Optional<JsonNode> result = commandService.requestResume(account, imId, timeout);
+        Optional<JsonNode> result = commandService.requestResume(account, resumeId, timeout);
+        boolean confirmed = result.filter(node -> node.path("success").asBoolean(false)
+                && node.path("confirmed").asBoolean(false)).isPresent();
+        if (!confirmed) {
+            log.warn("候选人 {} 索要未获确认,保留原状态", candidate.getId());
+            return;
+        }
         record.setStatus("REQUESTED");
         greetingMapper.updateById(record);
-        log.info("索要简历已发起(account={}, imId={}): {}", account.getId(), imId,
-                result.map(Object::toString).orElse("无输出"));
-    }
-
-    private String resolveImId(Candidate candidate) {
-        JsonNode snapshot = JsonExtractor.parse(candidate.getSnapshot()).orElse(null);
-        return snapshot == null ? "" : snapshot.path("im_id").asText("");
+        log.info("索要简历已确认(account={}, candidate={})", account.getId(), candidate.getId());
     }
 
     /**

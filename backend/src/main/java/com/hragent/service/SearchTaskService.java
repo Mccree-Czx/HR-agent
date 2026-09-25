@@ -90,6 +90,7 @@ public class SearchTaskService {
         if (account == null) {
             throw BizException.notFound("猎聘账号不存在");
         }
+        requireRecommendJobId(jd);
         SearchTask task = new SearchTask();
         task.setJdId(jdId);
         task.setAccountId(accountId);
@@ -124,8 +125,9 @@ public class SearchTaskService {
             List<JsonNode> candidates;
             if ("RECOMMEND".equals(task.getTaskType())) {
                 // 平台推荐:拉取猎聘按已发布职位推送的推荐人选
+                String jobId = requireRecommendJobId(jdMapper.selectById(task.getJdId()));
                 candidates = commandService.recommend(
-                        account, Duration.ofMinutes(properties.getLiepin().getShortTimeoutMinutes()));
+                        account, jobId, Duration.ofMinutes(properties.getLiepin().getShortTimeoutMinutes()));
             } else {
                 Duration timeout = Duration.ofMinutes(properties.getLiepin().getSearchTimeoutMinutes());
                 candidates = commandService.search(
@@ -201,6 +203,13 @@ public class SearchTaskService {
             return m.group(1);
         }
         return node.path("talentId").asText("");
+    }
+
+    private String requireRecommendJobId(Jd jd) {
+        if (jd == null || jd.getLiepinJobId() == null || !jd.getLiepinJobId().matches("[1-9][0-9]*")) {
+            throw BizException.badRequest("岗位不存在或未关联有效的猎聘岗位 ID，禁止默认推荐");
+        }
+        return jd.getLiepinJobId();
     }
 
     private String toJson(JsonNode node) {

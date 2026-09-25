@@ -112,13 +112,15 @@ class ResumeCollectServiceTest {
 
     @Test
     void collectOneRequestsResumeWhenReplied() throws Exception {
+        when(commandService.requestResume(any(), org.mockito.ArgumentMatchers.eq("r1"), any()))
+                .thenReturn(java.util.Optional.of(objectMapper.readTree("{\"success\":true,\"confirmed\":true}")));
         when(commandService.chatlist(any(LiepinAccount.class), any(Duration.class)))
                 .thenReturn(List.of(objectMapper.readTree(
                         "{\"user_id\":\"u1\",\"im_id\":\"im1\",\"direction\":\"1\"}")));
 
         resumeCollectService.collectOne(record, candidate);
 
-        verify(commandService).requestResume(any(LiepinAccount.class), anyString(), any(Duration.class));
+        verify(commandService).requestResume(any(LiepinAccount.class), org.mockito.ArgumentMatchers.eq("r1"), any(Duration.class));
         GreetingRecord after = greetingMapper.selectById(record.getId());
         assertEquals("REQUESTED", after.getStatus());
     }
