@@ -17,10 +17,18 @@
 - 如果改动影响现有行为,必须同步更新受影响的测试用例。
 - 测试通过后,方可视为本次改动完成并交付。
 
+### 3. 工具目录规范(tools/liepin-cli)
+
+- `tools/liepin-cli` 为 liepin-cli 的 fork(上游 Viy1204/liepin-cli),已新增 `jobpublish`(发布职位)与 `jobdelete`(删除职位)命令,代码纳入本仓库统一管理。
+- 修改该目录后必须执行 `npm run build` 验证 TypeScript 编译通过,并在根目录 `backend/` 执行 `mvn test` 确保全部测试通过。
+- 涉及猎聘页面的真机验证仅使用临时测试职位,不得对真实在招职位做破坏性验证。
+- 猎聘页面逆向分析产物(bundle-downloads、probe 输出等)不得入库(已在 .gitignore 排除)。
+
 ## 交付流程
 
 1. 完成代码改动。
 2. 编写或更新相关测试。
 3. 运行测试并确保全部通过。
 4. 创建对应的 Git commit。
-5. 向用户交付。
+5. 推送到远程仓库(`git push origin main`)。
+6. 向用户交付。
