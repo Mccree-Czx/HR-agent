@@ -20,6 +20,7 @@ import { requestPhoneCommand, requestResumeCommand } from '../toolset/request.js
 import { joblistCommand } from '../toolset/joblist.js';
 import { jobpublishCommand } from '../toolset/jobpublish.js';
 import { jobdeleteCommand } from '../toolset/jobdelete.js';
+import { attachDownloadCommand } from '../toolset/attach-download.js';
 import { skillCommand } from '../toolset/skill.js';
 import { quitCommand } from '../toolset/quit.js';
 import { acquireBusyLock, releaseBusyLock } from '../common/busy_lock.js';
@@ -66,6 +67,7 @@ const commands: Command[] = [
   joblistCommand,
   jobpublishCommand,
   jobdeleteCommand,
+  attachDownloadCommand,
   skillCommand,
   quitCommand,
 ];

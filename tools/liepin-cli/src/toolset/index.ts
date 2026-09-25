@@ -14,4 +14,5 @@ export * from './request.js';
 export * from './joblist.js';
 export * from './jobpublish.js';
 export * from './jobdelete.js';
+export * from './attach-download.js';
 export * from './quit.js';
