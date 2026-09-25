@@ -22,6 +22,7 @@ import java.util.regex.Pattern;
  * JD 发布到猎聘:
  * - 系统 JD → jobpublish 命令数据 → fork 版 CLI(草稿→正式上线)→ 回写 liepin_job_id
  * - 发布是公开不可逆动作:前端二次确认 + 同一 JD 仅允许发布一次(已发布拒绝)
+ * - 删除岗位时同步删除猎聘职位(先删猎聘成功后再删系统记录,保证状态一致)
  */
 @Slf4j
 @Service
@@ -97,6 +98,34 @@ public class JdPublishService {
             log.error("岗位「{}」发布失败: {}", jd.getTitle(), msg);
             throw BizException.badRequest("发布失败: " + msg);
         }
+    }
+
+    /** 删除岗位:有关联猎聘职位时先删猎聘,成功后删系统记录;失败保留系统记录 */
+    public void deleteWithSync(Long jdId) {
+        Jd jd = jdMapper.selectById(jdId);
+        if (jd == null) {
+            throw BizException.notFound("岗位不存在");
+        }
+        String jobId = jd.getLiepinJobId();
+        if (jobId != null && !jobId.isBlank()) {
+            LiepinAccount account = accountMapper.selectOne(new LambdaQueryWrapper<LiepinAccount>()
+                    .eq(LiepinAccount::getLoginStatus, "NORMAL")
+                    .orderByAsc(LiepinAccount::getId)
+                    .last("LIMIT 1"));
+            if (account == null) {
+                throw BizException.badRequest("无可用猎聘账号(NORMAL),无法同步删除猎聘职位");
+            }
+            Optional<JsonNode> result = commandService.jobDelete(account, jobId, Duration.ofMinutes(3));
+            JsonNode node = result.orElseThrow(
+                    () -> new IllegalStateException("jobdelete 无有效 JSON 输出"));
+            if (!node.path("success").asBoolean(false)) {
+                throw BizException.badRequest("猎聘职位删除失败: "
+                        + node.path("message").asText("未知原因") + ",系统记录已保留");
+            }
+            log.info("猎聘职位 {} 已删除(随岗位「{}」同步删除)", jobId, jd.getTitle());
+        }
+        jdMapper.deleteById(jdId);
+        log.info("岗位「{}」(id={}) 已删除", jd.getTitle(), jdId);
     }
 
     private void validate(Jd jd) {

@@ -175,9 +175,16 @@ async function handleSave() {
 }
 
 async function handleDelete(row) {
-  await ElMessageBox.confirm(`确定删除岗位「${row.title}」?`, '确认', { type: 'warning' })
+  const liepinTip = row.liepinJobId
+    ? `\n将同时删除猎聘上的职位(#${row.liepinJobId}),此操作不可撤销!`
+    : ''
+  await ElMessageBox.confirm(
+    `确定删除岗位「${row.title}」?${liepinTip}`,
+    '删除确认',
+    { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' }
+  )
   await jdApi.remove(row.id)
-  ElMessage.success('已删除')
+  ElMessage.success(row.liepinJobId ? '已删除(含猎聘职位)' : '已删除')
   load(pageNo.value)
 }
 

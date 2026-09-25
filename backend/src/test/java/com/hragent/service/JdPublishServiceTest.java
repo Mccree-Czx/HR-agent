@@ -126,4 +126,41 @@ class JdPublishServiceTest {
         assertEquals("040", jdPublishService.resolveDegreeCode(null));
         assertEquals("050", jdPublishService.resolveDegreeCode("050"));
     }
+
+    @Test
+    void deleteWithoutLiepinJobIdDirectlyRemoves() {
+        Jd jd = createJd();
+        jdPublishService.deleteWithSync(jd.getId());
+        assertEquals(0, jdMapper.selectCount(null));
+    }
+
+    @Test
+    void deleteWithLiepinJobIdSyncsToLiepin() throws Exception {
+        when(commandService.jobDelete(any(), anyString(), any(Duration.class)))
+                .thenReturn(Optional.of(objectMapper.readTree(
+                        "{\"success\":true,\"deleted\":[\"85869999\"],\"message\":\"已删除 1 个职位\"}")));
+
+        Jd jd = createJd();
+        jd.setLiepinJobId("85869999");
+        jd.setPublishStatus("PUBLISHED");
+        jdMapper.updateById(jd);
+
+        jdPublishService.deleteWithSync(jd.getId());
+        assertEquals(0, jdMapper.selectCount(null), "猎聘删除成功后应删系统记录");
+    }
+
+    @Test
+    void deleteAbortsAndKeepsRecordWhenLiepinFails() throws Exception {
+        when(commandService.jobDelete(any(), anyString(), any(Duration.class)))
+                .thenReturn(Optional.of(objectMapper.readTree(
+                        "{\"success\":false,\"message\":\"网络错误\"}")));
+
+        Jd jd = createJd();
+        jd.setLiepinJobId("85869999");
+        jd.setPublishStatus("PUBLISHED");
+        jdMapper.updateById(jd);
+
+        assertThrows(BizException.class, () -> jdPublishService.deleteWithSync(jd.getId()));
+        assertEquals(1, jdMapper.selectCount(null), "猎聘删除失败时应保留系统记录");
+    }
 }

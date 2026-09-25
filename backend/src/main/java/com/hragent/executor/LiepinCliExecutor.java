@@ -55,8 +55,7 @@ public class LiepinCliExecutor {
         ProcessBuilder pb = new ProcessBuilder(command);
         pb.redirectErrorStream(true);
         pb.environment().put("LIEPIN_USER_DATA_DIR", resolveUserDataDir(account));
-        pb.environment().put("LIEPIN_BROWSER_REMOTE_DEBUGGING_PORT",
-                String.valueOf(BASE_DEBUG_PORT + (account.getId() == null ? 0 : account.getId() % 1000)));
+        pb.environment().put("LIEPIN_BROWSER_REMOTE_DEBUGGING_PORT", String.valueOf(resolveDebugPort(account)));
 
         log.info("执行 liepin-cli: {} (account={}, dataDir={})",
                 String.join(" ", args), account.getId(), resolveUserDataDir(account));
@@ -115,6 +114,17 @@ public class LiepinCliExecutor {
             return account.getUserDataDir();
         }
         return properties.getLiepin().getDataDirBase() + "/account-" + account.getId();
+    }
+
+    /**
+     * CDP 端口分配:
+     * - 首个账号(单账号场景)直接用 CLI 默认端口 53471,与手动 CLI 命令
+     *   使用同一 user-data 时复用同一只浏览器,避免实例互踩;
+     * - 多账号(id>1)按 id 偏移,各账号的浏览器实例互不干扰。
+     */
+    private int resolveDebugPort(LiepinAccount account) {
+        long accountId = account.getId() == null ? 1L : account.getId();
+        return accountId == 1L ? BASE_DEBUG_PORT : BASE_DEBUG_PORT + (int) (accountId % 1000);
     }
 
     private String truncate(String s, int max) {

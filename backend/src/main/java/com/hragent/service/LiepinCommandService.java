@@ -90,6 +90,12 @@ public class LiepinCommandService {
         return list;
     }
 
+    /** 删除猎聘职位(fork 版 CLI 的 jobdelete 命令:自动先结束发布再删除) */
+    public Optional<JsonNode> jobDelete(LiepinAccount account, String jobId, Duration timeout) {
+        CliResult result = run(account, timeout, "jobdelete", "--job", jobId, "--json");
+        return JsonExtractor.parse(result.stdout());
+    }
+
     /** 聊天列表 → 数组(同意状态检测依据) */
     public List<JsonNode> chatlist(LiepinAccount account, Duration timeout) {
         CliResult result = run(account, timeout, "chatlist", "--json");

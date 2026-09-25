@@ -54,9 +54,10 @@ public class JdController {
         return ApiResponse.ok(jdService.update(id, jd));
     }
 
+    /** 删除岗位:有关联猎聘职位时同步删除猎聘职位(先删猎聘成功后删系统记录) */
     @DeleteMapping("/{id}")
     public ApiResponse<Void> delete(@PathVariable Long id) {
-        jdService.delete(id);
+        jdPublishService.deleteWithSync(id);
         return ApiResponse.ok(null);
     }
 
