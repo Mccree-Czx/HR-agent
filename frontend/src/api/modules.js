@@ -10,7 +10,9 @@ export const jdApi = {
   get: (id) => http.get(`/jd/${id}`),
   create: (data) => http.post('/jd', data),
   update: (id, data) => http.put(`/jd/${id}`, data),
-  remove: (id) => http.delete(`/jd/${id}`)
+  remove: (id) => http.delete(`/jd/${id}`),
+  publish: (id) => http.post(`/jd/${id}/publish`),
+  syncLiepin: () => http.post('/jd/sync-liepin')
 }
 
 export const accountApi = {

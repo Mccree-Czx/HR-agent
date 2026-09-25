@@ -71,6 +71,25 @@ public class LiepinCommandService {
         return list;
     }
 
+    /** 发布职位到猎聘(fork 版 CLI 的 jobpublish 命令,草稿→正式上线) */
+    public Optional<JsonNode> jobPublish(LiepinAccount account, String dataJson, Duration timeout) {
+        CliResult result = run(account, timeout, "jobpublish", "--data", dataJson, "--json");
+        return JsonExtractor.parse(result.stdout());
+    }
+
+    /** 猎聘职位列表(招聘者端,用于同步到系统岗位管理) */
+    public List<JsonNode> jobList(LiepinAccount account, Duration timeout) {
+        CliResult result = run(account, timeout, "joblist", "--limit", "40", "--json");
+        JsonNode node = JsonExtractor.parse(result.stdout())
+                .orElseThrow(() -> BizException.badRequest("joblist 输出无有效 JSON"));
+        if (!node.isArray()) {
+            throw BizException.badRequest("joblist 输出不是数组");
+        }
+        List<JsonNode> list = new ArrayList<>();
+        node.forEach(list::add);
+        return list;
+    }
+
     /** 聊天列表 → 数组(同意状态检测依据) */
     public List<JsonNode> chatlist(LiepinAccount account, Duration timeout) {
         CliResult result = run(account, timeout, "chatlist", "--json");

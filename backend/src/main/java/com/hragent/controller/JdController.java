@@ -3,7 +3,9 @@ package com.hragent.controller;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.hragent.common.ApiResponse;
 import com.hragent.entity.Jd;
+import com.hragent.service.JdPublishService;
 import com.hragent.service.JdService;
+import com.hragent.service.LiepinJobSyncService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -20,9 +22,14 @@ import org.springframework.web.bind.annotation.RestController;
 public class JdController {
 
     private final JdService jdService;
+    private final JdPublishService jdPublishService;
+    private final LiepinJobSyncService jobSyncService;
 
-    public JdController(JdService jdService) {
+    public JdController(JdService jdService, JdPublishService jdPublishService,
+                        LiepinJobSyncService jobSyncService) {
         this.jdService = jdService;
+        this.jdPublishService = jdPublishService;
+        this.jobSyncService = jobSyncService;
     }
 
     @GetMapping
@@ -51,5 +58,18 @@ public class JdController {
     public ApiResponse<Void> delete(@PathVariable Long id) {
         jdService.delete(id);
         return ApiResponse.ok(null);
+    }
+
+    /** 发布到猎聘(草稿→正式上线;已发布拒绝重复;import 是公开不可逆动作) */
+    @PostMapping("/{id}/publish")
+    public ApiResponse<Jd> publish(@PathVariable Long id) {
+        return ApiResponse.ok(jdPublishService.publish(id));
+    }
+
+    /** 同步猎聘在招职位到系统岗位管理(按职位 ID 幂等) */
+    @PostMapping("/sync-liepin")
+    public ApiResponse<java.util.Map<String, Integer>> syncLiepin(
+            @RequestParam(required = false) Long accountId) {
+        return ApiResponse.ok(jobSyncService.sync(accountId));
     }
 }

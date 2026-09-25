@@ -24,3 +24,6 @@ backend/src/main/resources/static/
 application-local.yml
 .env
 runtime/
+
+# liepin-cli fork(独立 git 仓库,单独管理)
+tools/liepin-cli/
