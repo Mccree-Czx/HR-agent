@@ -113,6 +113,42 @@ public class LiepinCommandService {
     }
 
     /**
+     * 单人会话消息 → 数组(来信轮询用)。
+     * 入参是<b>对方 im_id</b>(chatlist 返回的 im_id),不是 resume_id;消息字段含 type/payload.bodies。
+     */
+    public List<JsonNode> chatmsg(LiepinAccount account, String imId, Duration timeout) {
+        if (imId == null || imId.isBlank()) {
+            throw BizException.badRequest("chatmsg 必须提供对方 im_id");
+        }
+        CliResult result = run(account, timeout, "chatmsg", imId, "--json");
+        JsonNode node = JsonExtractor.parse(result.stdout())
+                .orElseThrow(() -> BizException.badRequest("chatmsg 输出无有效 JSON"));
+        if (!node.isArray()) {
+            throw BizException.badRequest("chatmsg 输出不是数组: " + truncate(result.stdout()));
+        }
+        List<JsonNode> list = new ArrayList<>();
+        node.forEach(list::add);
+        return list;
+    }
+
+    /**
+     * 下载指定会话的简历附件(走浏览器下载通道 + PDF 校验)。
+     * 输出 {@code {success,file,bytes,sha256,sourceOrigin}};失败时 CLI 非零退出并由 {@link #run} 抛出
+     * {@link CliException}(由上层留待下轮重试,不为其写半状态)。
+     */
+    public Optional<JsonNode> attachDownload(LiepinAccount account, String imId, String outDir, Duration timeout) {
+        if (imId == null || imId.isBlank()) {
+            throw BizException.badRequest("attach-download 必须提供会话 im_id");
+        }
+        if (outDir == null || outDir.isBlank()) {
+            throw BizException.badRequest("attach-download 必须提供下载目录");
+        }
+        CliResult result = run(account, timeout, "attach-download",
+                "--imId", imId, "--out", outDir, "--json");
+        return JsonExtractor.parse(result.stdout());
+    }
+
+    /**
      * 打招呼 → 输出对象(含 success 标记)。
      * ejobId 必传:猎聘发起沟通必须挂在具体职位下,缺省时 CLI 会回退到账号第一个职位(导致错配)。
      * message 用 --message 传递(位置参数只能被 CLI 识别首个)。
