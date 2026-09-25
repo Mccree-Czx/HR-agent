@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS greeting_record (
     id           BIGINT AUTO_INCREMENT PRIMARY KEY,
     candidate_id BIGINT NOT NULL,
     account_id   BIGINT NOT NULL COMMENT '执行打招呼的账号',
+    liepin_job_id VARCHAR(50) COMMENT '打招呼关联的猎聘职位ID(审计)',
     message      TEXT COMMENT '打招呼话术',
     status       VARCHAR(20) NOT NULL DEFAULT 'SENT' COMMENT 'SENT/AGREED/NO_RESPONSE',
     mode         VARCHAR(20) NOT NULL COMMENT 'AUTO/MANUAL',

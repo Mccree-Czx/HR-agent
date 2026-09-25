@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS greeting_record (
     id           BIGINT AUTO_INCREMENT PRIMARY KEY,
     candidate_id BIGINT NOT NULL,
     account_id   BIGINT NOT NULL,
+    liepin_job_id VARCHAR(50),
     message      TEXT,
     status       VARCHAR(20) NOT NULL DEFAULT 'SENT',
     mode         VARCHAR(20) NOT NULL,

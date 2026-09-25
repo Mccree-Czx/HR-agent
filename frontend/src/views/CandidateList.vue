@@ -39,7 +39,9 @@
       <el-table-column label="打招呼" width="150">
         <template #default="{ row }">
           <template v-if="row.greeting">
-            <el-tag :type="greetTagType(row.greeting.status)" size="small">{{ greetText(row.greeting.status) }}</el-tag>
+            <el-tooltip :content="`关联猎聘职位: ${row.greeting.liepinJobId || '无(历史记录)'}`">
+              <el-tag :type="greetTagType(row.greeting.status)" size="small">{{ greetText(row.greeting.status) }}</el-tag>
+            </el-tooltip>
           </template>
           <el-tag v-else type="info" size="small">未联系</el-tag>
         </template>

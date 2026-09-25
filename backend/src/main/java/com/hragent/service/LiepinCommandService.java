@@ -109,9 +109,15 @@ public class LiepinCommandService {
         return list;
     }
 
-    /** 打招呼 → 输出对象(含 success 标记) */
-    public Optional<JsonNode> greet(LiepinAccount account, String resumeId, String message, Duration timeout) {
-        CliResult result = run(account, timeout, "greet", resumeId, message, "--json");
+    /**
+     * 打招呼 → 输出对象(含 success 标记)。
+     * ejobId 必传:猎聘发起沟通必须挂在具体职位下,缺省时 CLI 会回退到账号第一个职位(导致错配)。
+     * message 用 --message 传递(位置参数只能被 CLI 识别首个)。
+     */
+    public Optional<JsonNode> greet(LiepinAccount account, String resumeId, String ejobId,
+                                    String message, Duration timeout) {
+        CliResult result = run(account, timeout, "greet", resumeId,
+                "--ejobId", ejobId, "--message", message, "--json");
         return JsonExtractor.parse(result.stdout());
     }
 

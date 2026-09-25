@@ -6,10 +6,12 @@ import com.hragent.ai.AiClient;
 import com.hragent.config.HrAgentProperties;
 import com.hragent.entity.Candidate;
 import com.hragent.entity.GreetingRecord;
+import com.hragent.entity.Jd;
 import com.hragent.entity.LiepinAccount;
 import com.hragent.executor.JsonExtractor;
 import com.hragent.repository.CandidateMapper;
 import com.hragent.repository.GreetingRecordMapper;
+import com.hragent.repository.JdMapper;
 import com.hragent.repository.LiepinAccountMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.Resource;
@@ -37,17 +39,20 @@ public class GreetingService {
     private final GreetingRecordMapper greetingMapper;
     private final CandidateMapper candidateMapper;
     private final LiepinAccountMapper accountMapper;
+    private final JdMapper jdMapper;
     private final LiepinCommandService commandService;
     private final AiClient aiClient;
     private final HrAgentProperties properties;
     private final ResourceLoader resourceLoader;
 
     public GreetingService(GreetingRecordMapper greetingMapper, CandidateMapper candidateMapper,
-                           LiepinAccountMapper accountMapper, LiepinCommandService commandService,
+                           LiepinAccountMapper accountMapper, JdMapper jdMapper,
+                           LiepinCommandService commandService,
                            AiClient aiClient, HrAgentProperties properties, ResourceLoader resourceLoader) {
         this.greetingMapper = greetingMapper;
         this.candidateMapper = candidateMapper;
         this.accountMapper = accountMapper;
+        this.jdMapper = jdMapper;
         this.commandService = commandService;
         this.aiClient = aiClient;
         this.properties = properties;
@@ -105,32 +110,53 @@ public class GreetingService {
             return false;
         }
 
-        // 3. 生成话术
+        // 3. 解析候选人来源岗位对应的猎聘职位(打招呼必须挂到具体职位,避免错配)
+        String ejobId = resolveEjobId(candidate);
+        if (ejobId == null) {
+            log.warn("候选人 {} 的来源岗位(JD id={})未关联猎聘职位,跳过打招呼;请先发布/关联职位",
+                    candidate.getId(), candidate.getJdId());
+            return false;
+        }
+
+        // 4. 生成话术
         String message = composeGreeting(candidate);
 
-        // 4. 人工确认模式:仅落库待确认,不发送(阶段 4 确认列表)
+        // 5. 人工确认模式:仅落库待确认,不发送(阶段 4 确认列表)
         if ("MANUAL".equals(account.getGreetMode())) {
-            insertRecord(account, candidate, message, "PENDING_CONFIRM");
+            insertRecord(account, candidate, ejobId, message, "PENDING_CONFIRM");
             log.info("候选人 {} 生成待确认打招呼(账号 {} 人工确认模式)", candidate.getId(), account.getId());
             return true;
         }
 
-        // 5. 自动模式:节奏控制 + 发送;失败(如候选人设隐私保护)记录后继续下一人
+        // 6. 自动模式:节奏控制 + 发送;失败(如候选人设隐私保护)记录后继续下一人
         try {
             enforcePace(account);
-            commandService.greet(account, candidate.getResumeId(), message,
+            commandService.greet(account, candidate.getResumeId(), ejobId, message,
                     Duration.ofMinutes(properties.getLiepin().getShortTimeoutMinutes()));
-            insertRecord(account, candidate, message, "SENT");
-            log.info("候选人 {} 打招呼已发送(账号 {})", candidate.getId(), account.getId());
+            insertRecord(account, candidate, ejobId, message, "SENT");
+            log.info("候选人 {} 打招呼已发送(账号 {}, 职位 {})", candidate.getId(), account.getId(), ejobId);
             return true;
         } catch (Exception e) {
             log.warn("候选人 {} 打招呼发送失败: {}", candidate.getId(), e.getMessage());
-            insertRecord(account, candidate, message, "SEND_FAILED");
+            insertRecord(account, candidate, ejobId, message, "SEND_FAILED");
             return false;
         }
     }
 
-    private void insertRecord(LiepinAccount account, Candidate candidate, String message, String status) {
+    /** 解析候选人来源岗位对应的猎聘职位 ID;缺失返回 null(调用方跳过并告警) */
+    private String resolveEjobId(Candidate candidate) {
+        if (candidate.getJdId() == null) {
+            return null;
+        }
+        Jd jd = jdMapper.selectById(candidate.getJdId());
+        if (jd == null || jd.getLiepinJobId() == null || jd.getLiepinJobId().isBlank()) {
+            return null;
+        }
+        return jd.getLiepinJobId();
+    }
+
+    private void insertRecord(LiepinAccount account, Candidate candidate, String ejobId,
+                              String message, String status) {
         GreetingRecord existing = greetingMapper.selectOne(new LambdaQueryWrapper<GreetingRecord>()
                 .eq(GreetingRecord::getCandidateId, candidate.getId())
                 .last("LIMIT 1"));
@@ -139,6 +165,7 @@ public class GreetingService {
             existing.setMessage(message);
             existing.setStatus(status);
             existing.setMode(account.getGreetMode());
+            existing.setLiepinJobId(ejobId);
             greetingMapper.updateById(existing);
             return;
         }
@@ -148,6 +175,7 @@ public class GreetingService {
         record.setMessage(message);
         record.setStatus(status);
         record.setMode(account.getGreetMode());
+        record.setLiepinJobId(ejobId);
         greetingMapper.insert(record);
     }
 

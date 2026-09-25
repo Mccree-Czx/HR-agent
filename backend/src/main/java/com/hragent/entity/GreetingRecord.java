@@ -18,6 +18,9 @@ public class GreetingRecord {
 
     private Long accountId;
 
+    /** 打招呼实际关联的猎聘职位 ID(来源岗位的 liepin_job_id,审计用) */
+    private String liepinJobId;
+
     private String message;
 
     private String status;
