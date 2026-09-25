@@ -212,6 +212,38 @@ class GreetingServiceTest {
     }
 
     @Test
+    void greetPassedAdvancesPastAlreadyContactedTopN() {
+        // 回归(Fix Round 1 Important-1):前 N 名已联系时,取数须先排除已联系者,
+        // 否则每轮只能取到被去重的 Top-N,created 恒为 0,存量永久停在 Top-N。
+        Candidate[] cs = new Candidate[7];
+        for (int i = 1; i <= 6; i++) {
+            Candidate c = candidate(i);
+            c.setScore(100 - i * 10); // 分数递减:c1 最高 ... c6 最低
+            candidateMapper.updateById(c);
+            cs[i] = c;
+        }
+        // 前 5 名(分数最高的 5 人)已有 SENT 联系记录
+        for (int i = 1; i <= 5; i++) {
+            GreetingRecord r = new GreetingRecord();
+            r.setCandidateId(cs[i].getId());
+            r.setAccountId(account.getId());
+            r.setLiepinJobId("85869365");
+            r.setMessage("已联系");
+            r.setStatus("SENT");
+            r.setMode("AUTO");
+            greetingMapper.insert(r);
+        }
+
+        int created = greetingService.greetPassed(jdId, 5);
+
+        assertEquals(1, created, "前5名已联系时应推进到第6名,而非 created=0");
+        assertEquals(1, greetingMapper.selectCount(new LambdaQueryWrapper<GreetingRecord>()
+                .eq(GreetingRecord::getCandidateId, cs[6].getId())
+                .eq(GreetingRecord::getStatus, "SENT")), "第6名应被新增为 SENT 记录");
+        assertEquals(6, greetingMapper.selectCount(null), "总记录 = 5 条已联系 + 1 条新联系");
+    }
+
+    @Test
     void sendFailureRecordsAndAllowsRetry() {
         // 首次发送失败(如候选人隐私保护)
         when(commandService.greet(any(), anyString(), anyString(), anyString(), any()))

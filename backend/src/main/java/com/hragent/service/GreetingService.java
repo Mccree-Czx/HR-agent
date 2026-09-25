@@ -65,9 +65,13 @@ public class GreetingService {
      */
     @Transactional
     public int greetPassed(Long jdId, int limit) {
+        // 取数即排除「已联系者」(SEND_FAILED 允许重试不算已联系),再按分数取前 limit 名;
+        // 否则前 N 名被去重后每轮 created=0,存量将永久停在 Top-N 不再推进。
         List<Candidate> candidates = candidateMapper.selectList(new LambdaQueryWrapper<Candidate>()
                 .eq(Candidate::getJdId, jdId)
                 .eq(Candidate::getPassStatus, "PASS")
+                .notExists("SELECT 1 FROM greeting_record g"
+                        + " WHERE g.candidate_id = candidate.id AND g.status <> 'SEND_FAILED'")
                 .orderByDesc(Candidate::getScore)
                 .last("LIMIT " + Math.max(1, Math.min(limit, 200))));
         if (candidates.isEmpty()) {
