@@ -38,6 +38,11 @@ hr-agent:
     # 飞书自定义机器人 webhook(留空则仅日志告警;开启加签时同步配置 secret)
     feishu-webhook: ${FEISHU_WEBHOOK:}
     feishu-secret: ${FEISHU_SECRET:}
+  auto-recruit:
+    # 自动招聘闭环总开关(默认关闭,启动时用 AUTO_RECRUIT_ENABLED=true 显式开启)
+    enabled: ${AUTO_RECRUIT_ENABLED:false}
+    # 单轮单岗位打招呼上限(取消日配额后的工作量边界)
+    greet-batch-limit: ${AUTO_RECRUIT_GREET_BATCH_LIMIT:5}
   storage:
     type: ${STORAGE_TYPE:minio}
     minio:

@@ -8,6 +8,7 @@ import com.hragent.config.HrAgentProperties;
 import com.hragent.entity.Candidate;
 import com.hragent.entity.Jd;
 import com.hragent.entity.ScoreRecord;
+import com.hragent.executor.CliException;
 import com.hragent.executor.JsonExtractor;
 import com.hragent.repository.CandidateMapper;
 import com.hragent.repository.JdMapper;
@@ -19,6 +20,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -78,6 +80,44 @@ public class ScoringEngine {
         candidate.setPassStatus(result.pending() ? "PENDING" : (result.pass() ? "PASS" : "FAIL"));
         candidateMapper.updateById(candidate);
         return record;
+    }
+
+    /**
+     * 批量补评分:遍历该岗位下 pass_status=PENDING 且尚无 (candidate, jd) 评分记录的候选人补齐评分。
+     * <p>- 已有评分记录者跳过(含「职能待确认」置 PENDING 的记录,避免重复消耗 token 死循环)
+     * <p>- 单个候选人失败不阻断其余候选人;风控异常上抛由熔断链路处理
+     * 返回本轮成功评分的候选人数量。
+     */
+    @Transactional
+    public int scorePending(Long jdId) {
+        List<Candidate> pending = candidateMapper.selectList(new LambdaQueryWrapper<Candidate>()
+                .eq(Candidate::getJdId, jdId)
+                .eq(Candidate::getPassStatus, "PENDING")
+                .orderByAsc(Candidate::getId));
+        if (pending.isEmpty()) {
+            return 0;
+        }
+        int scored = 0;
+        for (Candidate candidate : pending) {
+            Long existing = scoreRecordMapper.selectCount(new LambdaQueryWrapper<ScoreRecord>()
+                    .eq(ScoreRecord::getCandidateId, candidate.getId())
+                    .eq(ScoreRecord::getJdId, jdId));
+            if (existing != null && existing > 0) {
+                continue;
+            }
+            try {
+                scoreAndSave(candidate.getId());
+                scored++;
+            } catch (CliException e) {
+                if (e.getType() == CliException.Type.RISK_CONTROL) {
+                    throw e;
+                }
+                log.warn("候选人 {} 补评分失败,跳过: {}", candidate.getId(), e.getMessage());
+            } catch (Exception e) {
+                log.warn("候选人 {} 补评分异常,跳过: {}", candidate.getId(), e.getMessage());
+            }
+        }
+        return scored;
     }
 
     /** 评分核心流程(不落库,便于测试与重试) */

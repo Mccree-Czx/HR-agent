@@ -24,6 +24,8 @@ public class HrAgentProperties {
 
     private Notify notify = new Notify();
 
+    private AutoRecruit autoRecruit = new AutoRecruit();
+
     @Data
     public static class Jwt {
 
@@ -113,6 +115,16 @@ public class HrAgentProperties {
 
             private String bucket = "resumes";
         }
+    }
+
+    @Data
+    public static class AutoRecruit {
+
+        /** 自动招聘闭环总开关(默认关闭,需启动参数显式开启) */
+        private boolean enabled = false;
+
+        /** 单轮单岗位打招呼上限(取消日配额后的工作量边界,可配置) */
+        private int greetBatchLimit = 5;
     }
 
     @Data
