@@ -105,7 +105,7 @@ public class ScoringEngine {
         int passThreshold = jd.getScoreThreshold() != null
                 ? jd.getScoreThreshold() : properties.getScoring().getPassThreshold();
         String systemPrompt = loadPrompt();
-        String userPrompt = buildUserPrompt(jd, candidate);
+        String userPrompt = buildUserPrompt(jd, candidate, passThreshold);
         int maxRetry = properties.getScoring().getMaxParseRetry();
         Exception lastError = null;
         for (int attempt = 0; attempt <= maxRetry; attempt++) {
@@ -157,7 +157,7 @@ public class ScoringEngine {
         return null;
     }
 
-    private String buildUserPrompt(Jd jd, Candidate candidate) {
+    private String buildUserPrompt(Jd jd, Candidate candidate, int passThreshold) {
         StringBuilder sb = new StringBuilder();
         sb.append("请按系统提示词中的评分细则,对候选人进行评分。\n\n");
         sb.append("## 岗位信息\n");
@@ -166,6 +166,8 @@ public class ScoringEngine {
         if (jd.getSalaryMin() != null || jd.getSalaryMax() != null) {
             sb.append("- 薪资预算(元/月): ").append(jd.getSalaryMin()).append(" ~ ").append(jd.getSalaryMax()).append("\n");
         }
+        // 门槛显式告知模型(评审 Important-2):最终通过还需 score >= 该值,由服务端硬规则强制
+        sb.append("- 通过门槛：").append(passThreshold).append(" 分\n");
         sb.append("\n## 候选人在线简历快照\n");
         sb.append(candidate.getSnapshot()).append("\n");
         return sb.toString();

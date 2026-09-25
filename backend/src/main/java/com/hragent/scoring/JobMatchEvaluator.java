@@ -3,6 +3,7 @@ package com.hragent.scoring;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -60,19 +61,33 @@ public final class JobMatchEvaluator {
      * 三态职能判定。
      *
      * @param expectations           期望职能标题(来源 candidate.snapshot 的期望字段,绝不用当前职位代替)
-     * @param classificationEvidence 可选的已核实归一化分类:职位标题 → 职能族(hardware/hr/software);
-     *                               为空表示无人工证据,仅用明确同义映射;含未知族或与明确映射冲突 → UNKNOWN
+     * @param classificationEvidence 已核实并归一化、且可追溯的分类证据:职位标题 → 职能族(hardware/hr/software);
+     *                               为空表示无人工证据,仅用明确同义映射;含未知族或与明确映射冲突 → UNKNOWN。
+     *                               调用方只应放入自带追溯来源(categorySource)的证据
      * @param targetJobTitle         目标岗位名称
      */
     public static Result evaluate(List<String> expectations, Map<String, String> classificationEvidence,
                                   String targetJobTitle) {
+        return evaluate(expectations, classificationEvidence, Set.of(), targetJobTitle);
+    }
+
+    /**
+     * 三态职能判定(可标记不可采信的分类证据)。
+     *
+     * @param untraceableCategories 携带 reviewedFamily 但缺少 categorySource 追溯字段的标题集合;
+     *                              这类分类证据不可采信,按冲突处理 → UNKNOWN(与 CLI 同口径)
+     */
+    static Result evaluate(List<String> expectations, Map<String, String> classificationEvidence,
+                           Set<String> untraceableCategories, String targetJobTitle) {
         if (expectations == null || expectations.isEmpty()) {
             return unknown("缺少可靠的求职期望或字段格式异常");
         }
-        Classification wanted = classify(targetJobTitle, familyOf(classificationEvidence, targetJobTitle));
+        Set<String> untraceable = untraceableCategories == null ? Set.of() : untraceableCategories;
+        Classification wanted = classify(targetJobTitle, familyOf(classificationEvidence, targetJobTitle),
+                untraceable.contains(key(targetJobTitle)));
         List<Classification> entries = new ArrayList<>();
         for (String title : expectations) {
-            entries.add(classify(title, familyOf(classificationEvidence, title)));
+            entries.add(classify(title, familyOf(classificationEvidence, title), untraceable.contains(key(title))));
         }
         if (wanted.conflict() || entries.stream().anyMatch(Classification::conflict)) {
             return unknown("职能分类证据缺失或与明确职位映射冲突");
@@ -95,7 +110,8 @@ public final class JobMatchEvaluator {
         if (evidence.malformed()) {
             return unknown("缺少可靠的求职期望或字段格式异常");
         }
-        return evaluate(evidence.titles(), evidence.reviewedFamilies(), targetJobTitle);
+        return evaluate(evidence.titles(), evidence.reviewedFamilies(),
+                evidence.untraceableCategories(), targetJobTitle);
     }
 
     /** 从候选人快照提取期望职能标题(仅取期望字段,绝不回退当前职位) */
@@ -103,20 +119,22 @@ public final class JobMatchEvaluator {
         return extractEvidence(snapshot).titles();
     }
 
-    record Evidence(List<String> titles, Map<String, String> reviewedFamilies, boolean malformed) {
+    record Evidence(List<String> titles, Map<String, String> reviewedFamilies,
+                    Set<String> untraceableCategories, boolean malformed) {
     }
 
     static Evidence extractEvidence(JsonNode snapshot) {
         List<String> titles = new ArrayList<>();
         Map<String, String> reviewedFamilies = new LinkedHashMap<>();
+        Set<String> untraceableCategories = new HashSet<>();
         boolean malformed = false;
         if (snapshot != null) {
             JsonNode evidence = snapshot.get("expectation_evidence");
             if (evidence != null && evidence.isObject()) {
                 JsonNode source = evidence.get("source");
-                if (source != null && source.isTextual() && !EXPECTATION_SOURCE.equals(source.asText())) {
-                    // 来源不可信 → 视为字段异常,拒绝匹配
-                    return new Evidence(List.of(), Map.of(), true);
+                if (source == null || !source.isTextual() || !EXPECTATION_SOURCE.equals(source.asText().trim())) {
+                    // 来源缺失/非文本/不可信 → 视为字段异常,拒绝匹配(与 CLI 同口径)
+                    return new Evidence(List.of(), Map.of(), Set.of(), true);
                 }
                 if (evidence.path("malformed").asBoolean(false)) {
                     malformed = true;
@@ -136,7 +154,12 @@ public final class JobMatchEvaluator {
                             titles.add(title);
                             JsonNode family = entry.get("reviewedFamily");
                             if (family != null && family.isTextual() && !family.asText().isBlank()) {
-                                reviewedFamilies.put(title, family.asText().trim());
+                                if (hasTraceableCategorySource(entry)) {
+                                    reviewedFamilies.put(title, family.asText().trim());
+                                } else {
+                                    // 携带 reviewedFamily 但无 categorySource 追溯字段 → 分类证据不可采信
+                                    untraceableCategories.add(title);
+                                }
                             }
                         }
                     }
@@ -155,22 +178,31 @@ public final class JobMatchEvaluator {
                 }
             }
         }
-        return new Evidence(titles, reviewedFamilies, malformed);
+        return new Evidence(titles, reviewedFamilies, untraceableCategories, malformed);
+    }
+
+    /** 分类证据须自带 categorySource 追溯字段方可采信(与 CLI 同口径) */
+    private static boolean hasTraceableCategorySource(JsonNode entry) {
+        JsonNode categorySource = entry.get("categorySource");
+        return categorySource != null && categorySource.isTextual() && !categorySource.asText().isBlank();
     }
 
     private static String familyOf(Map<String, String> evidence, String title) {
         if (evidence == null) {
             return null;
         }
-        return evidence.get(title == null ? "" : title.trim());
+        return evidence.get(key(title));
     }
 
-    private static Classification classify(String title, String reviewedFamily) {
-        String key = title == null ? "" : title.trim();
-        String alias = TITLE_FAMILIES.get(key);
+    private static String key(String title) {
+        return title == null ? "" : title.trim();
+    }
+
+    private static Classification classify(String title, String reviewedFamily, boolean untraceable) {
+        String alias = TITLE_FAMILIES.get(key(title));
         boolean verified = reviewedFamily != null && !reviewedFamily.isBlank();
-        if (verified && !KNOWN_FAMILIES.contains(reviewedFamily)) {
-            // 已核实分类但族不在已知集合 → 证据不可信
+        if (untraceable || (verified && !KNOWN_FAMILIES.contains(reviewedFamily))) {
+            // 分类证据不可采信(缺追溯字段/族不在已知集合) → 冲突
             return new Classification(null, true);
         }
         String family = verified ? reviewedFamily : alias;

@@ -53,6 +53,7 @@ public class JdService {
     public Jd create(Jd jd) {
         jd.setId(null);
         jd.setStatus("ACTIVE");
+        stripThresholdConfirmation(jd);
         jdMapper.insert(jd);
         opLogService.log("CREATE", "jd", jd.getId(), "创建岗位: " + jd.getTitle());
         return get(jd.getId());
@@ -62,9 +63,23 @@ public class JdService {
     public Jd update(Long id, Jd jd) {
         get(id);
         jd.setId(id);
+        stripThresholdConfirmation(jd);
         jdMapper.updateById(jd);
         opLogService.log("UPDATE", "jd", id, "更新岗位: " + jd.getTitle());
         return get(id);
+    }
+
+    /**
+     * 屏蔽通用 JD 接口对门槛确认字段的写入(评审 Critical-1):
+     * 门槛只能经 {@link JdThresholdService#confirm} 写入,防止任一登录用户经 POST/PUT /api/jd
+     * 直接注入 scoreThreshold/thresholdConfirmedAt 绕过确认校验放行自动外发;
+     * updateById 忽略 null 字段,故不会误清既有确认值。
+     */
+    private void stripThresholdConfirmation(Jd jd) {
+        jd.setScoreThreshold(null);
+        jd.setThresholdSuggestion(null);
+        jd.setThresholdConfirmedBy(null);
+        jd.setThresholdConfirmedAt(null);
     }
 
     @Transactional

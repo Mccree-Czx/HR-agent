@@ -121,4 +121,39 @@ class JobMatchEvaluatorTest {
         assertEquals(JobMatchEvaluator.Status.UNKNOWN,
                 JobMatchEvaluator.evaluateFromSnapshot(snapshot, "硬件研发工程师").status());
     }
+
+    /** 评审 Important-3:来源缺失/非文本不得当作可信证据(与 CLI 同口径) */
+    @Test
+    void snapshotMissingEvidenceSourceIsUnknown() throws Exception {
+        var snapshot = objectMapper.readTree(
+                "{\"expectation_evidence\":{\"entries\":[{\"title\":\"高级硬件工程师\"}]}}");
+        assertEquals(JobMatchEvaluator.Status.UNKNOWN,
+                JobMatchEvaluator.evaluateFromSnapshot(snapshot, "硬件研发工程师").status());
+
+        var nonTextual = objectMapper.readTree(
+                "{\"expectation_evidence\":{\"source\":42,\"entries\":[{\"title\":\"高级硬件工程师\"}]}}");
+        assertEquals(JobMatchEvaluator.Status.UNKNOWN,
+                JobMatchEvaluator.evaluateFromSnapshot(nonTextual, "硬件研发工程师").status());
+    }
+
+    /** 评审 Important-3:携带 reviewedFamily 但无 categorySource 追溯字段 → 不可采信 → UNKNOWN */
+    @Test
+    void snapshotReviewedFamilyWithoutCategorySourceIsUnknown() throws Exception {
+        var snapshot = objectMapper.readTree(
+                "{\"expectation_evidence\":{\"source\":\"resumeDetailVo.jobWant.jobTitleNames\","
+                        + "\"entries\":[{\"title\":\"高级硬件工程师\",\"reviewedFamily\":\"hardware\"}]}}");
+        assertEquals(JobMatchEvaluator.Status.UNKNOWN,
+                JobMatchEvaluator.evaluateFromSnapshot(snapshot, "硬件研发工程师").status());
+    }
+
+    /** 自带 categorySource 追溯字段的分类证据仍可参与匹配(未被本次收紧误伤) */
+    @Test
+    void snapshotTraceableReviewedFamilyStillMatches() throws Exception {
+        var snapshot = objectMapper.readTree(
+                "{\"expectation_evidence\":{\"source\":\"resumeDetailVo.jobWant.jobTitleNames\","
+                        + "\"entries\":[{\"title\":\"未映射职位\",\"reviewedFamily\":\"hardware\","
+                        + "\"categorySource\":\"mock-reviewed-taxonomy\"}]}}");
+        assertEquals(JobMatchEvaluator.Status.MATCH,
+                JobMatchEvaluator.evaluateFromSnapshot(snapshot, "硬件工程师").status());
+    }
 }

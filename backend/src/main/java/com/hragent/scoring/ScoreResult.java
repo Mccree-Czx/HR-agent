@@ -16,9 +16,21 @@ public record ScoreResult(
         String summary,
         List<String> reasons) {
 
+    /** 缺省通过门槛(既有调用点不传阈值时的向后兼容默认值) */
+    public static final int DEFAULT_PASS_THRESHOLD = 60;
+
+    /**
+     * 从模型输出 JSON 解析并校验(使用默认门槛 {@link #DEFAULT_PASS_THRESHOLD})。
+     */
+    public static ScoreResult fromJson(JsonNode node) {
+        return fromJson(node, DEFAULT_PASS_THRESHOLD);
+    }
+
     /**
      * 从模型输出 JSON 解析并校验。
      * 非法结构/越界分数/缺失字段均抛出 IllegalArgumentException,由调用方决定重试或放弃。
+     * 硬规则(评审 Important-2):最终 pass = 模型 pass && score >= passThreshold,
+     * 即模型判过但分数低于门槛时**降级为不通过**,门槛由岗位确认值决定。
      */
     public static ScoreResult fromJson(JsonNode node, int passThreshold) {
         if (node == null || !node.isObject()) {
@@ -36,10 +48,12 @@ public record ScoreResult(
         if (passNode == null || !passNode.isBoolean()) {
             throw new IllegalArgumentException("评分输出缺少合法 pass 字段");
         }
-        boolean pass = passNode.asBoolean();
-        if (score >= passThreshold && !pass) {
+        boolean modelPass = passNode.asBoolean();
+        if (score >= passThreshold && !modelPass) {
             throw new IllegalArgumentException("score 达阈值但 pass=false,输出矛盾");
         }
+        // 硬规则:模型判过但未达门槛 → 降级为不通过(门槛不得被模型布尔值绕过)
+        boolean pass = modelPass && score >= passThreshold;
         String summary = node.has("summary") ? node.get("summary").asText("") : "";
         List<String> reasons = new ArrayList<>();
         if (node.has("reasons") && node.get("reasons").isArray()) {

@@ -11,6 +11,7 @@ import com.hragent.repository.JdMapper;
 import com.hragent.repository.ScoreRecordMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
@@ -176,6 +177,39 @@ class ScoringEngineTest {
         Candidate c = candidate("{\"name\":\"张三\",\"salary\":\"20-30K\",\"want_title\":\"软件工程师\"}");
         scoringEngine.scoreAndSave(c.getId());
         verify(aiClient, times(1)).chat(anyString(), anyString());
+        assertEquals("PASS", candidateMapper.selectById(c.getId()).getPassStatus());
+    }
+
+    /** 评审 Important-2:模型 pass=true 但 score < 已确认门槛 → 最终 FAIL(门槛不可被模型绕过) */
+    @Test
+    void scoreBelowConfirmedThresholdDowngradesModelPassToFail() {
+        jd.setScoreThreshold(80);
+        jdMapper.updateById(jd);
+        when(aiClient.chat(anyString(), anyString()))
+                .thenReturn("{\"score\":70,\"pass\":true,\"summary\":\"模型认为可过\",\"reasons\":[\"a\"]}");
+
+        Candidate c = candidate("{\"name\":\"张三\",\"salary\":\"20-30K\",\"want_title\":\"软件工程师\"}");
+        ScoreRecord record = scoringEngine.scoreAndSave(c.getId());
+
+        assertEquals(70, record.getScore());
+        assertEquals("FAIL", candidateMapper.selectById(c.getId()).getPassStatus(),
+                "score 70 低于门槛 80,模型 pass=true 也必须 FAIL");
+    }
+
+    /** 评审 Important-2:评分提示词必须显式携带已确认门槛 */
+    @Test
+    void userPromptCarriesConfirmedThreshold() {
+        jd.setScoreThreshold(80);
+        jdMapper.updateById(jd);
+        when(aiClient.chat(anyString(), anyString()))
+                .thenReturn("{\"score\":85,\"pass\":true,\"summary\":\"ok\",\"reasons\":[\"a\"]}");
+
+        Candidate c = candidate("{\"name\":\"张三\",\"salary\":\"20-30K\",\"want_title\":\"软件工程师\"}");
+        scoringEngine.scoreAndSave(c.getId());
+
+        ArgumentCaptor<String> userPrompt = ArgumentCaptor.forClass(String.class);
+        verify(aiClient).chat(anyString(), userPrompt.capture());
+        assertTrue(userPrompt.getValue().contains("通过门槛：80 分"), "评分提示词须携带已确认门槛");
         assertEquals("PASS", candidateMapper.selectById(c.getId()).getPassStatus());
     }
 }
