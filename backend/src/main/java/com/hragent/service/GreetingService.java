@@ -21,7 +21,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -29,8 +28,9 @@ import java.util.List;
  * 打招呼模块(评审 P1-5/P1-6):
  * - 全局防重复联系:同一候选人仅可被联系一次(greeting_record.candidate_id 唯一键 + 业务查重)
  * - 账号维度模式:AUTO 直接发送;MANUAL 生成待确认记录不发送(阶段 4 确认列表处理)
- * - 每日配额:账号当日已发送数达到 daily_greet_quota 则停止该账号
+ * - 门槛门禁(fail-closed):来源岗位未确认门槛(threshold_confirmed_at 为空)绝不外发
  * - 操作节奏:同账号两次发送间隔不小于 greetIntervalSeconds(评审 P0-3)
+ * - 注意:系统自设的每日配额拦截已移除(daily_greet_quota 列仅作平台权益参考)
  */
 @Slf4j
 @Service
@@ -104,9 +104,10 @@ public class GreetingService {
             return false;
         }
 
-        // 2. 每日配额
-        if (isQuotaExhausted(account)) {
-            log.warn("账号 {} 当日打招呼配额已用尽,停止", account.getId());
+        // 2. 门槛门禁(fail-closed):来源岗位未确认门槛 → 绝不外发,不产生任何记录/状态变更
+        Jd jd = candidate.getJdId() == null ? null : jdMapper.selectById(candidate.getJdId());
+        if (jd == null || jd.getThresholdConfirmedAt() == null) {
+            log.warn("岗位未确认门槛,跳过外发(候选人 {}, JD {})", candidate.getId(), candidate.getJdId());
             return false;
         }
 
@@ -195,16 +196,6 @@ public class GreetingService {
             log.warn("话术生成失败,使用固定模板: {}", e.getMessage());
         }
         return "您好,看到您的背景与我们岗位较为匹配,方便进一步沟通吗?";
-    }
-
-    private boolean isQuotaExhausted(LiepinAccount account) {
-        LocalDateTime todayStart = LocalDate.now().atStartOfDay();
-        Long sentToday = greetingMapper.selectCount(new LambdaQueryWrapper<GreetingRecord>()
-                .eq(GreetingRecord::getAccountId, account.getId())
-                .eq(GreetingRecord::getStatus, "SENT")
-                .ge(GreetingRecord::getCreatedAt, todayStart));
-        Integer quota = account.getDailyGreetQuota();
-        return quota != null && sentToday >= quota;
     }
 
     /** 节奏控制:距该账号上次发送不足间隔时等待(评审 P0-3) */

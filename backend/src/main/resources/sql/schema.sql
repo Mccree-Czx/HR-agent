@@ -18,6 +18,10 @@ CREATE TABLE IF NOT EXISTS jd (
     publish_status VARCHAR(20) NOT NULL DEFAULT 'NOT_PUBLISHED' COMMENT 'NOT_PUBLISHED/PUBLISHING/PUBLISHED/FAILED',
     liepin_job_id VARCHAR(50) COMMENT '猎聘职位ID',
     publish_error VARCHAR(500) COMMENT '发布失败原因',
+    score_threshold INT COMMENT '已确认的评分通过门槛(1-100,NULL=未确认)',
+    threshold_suggestion VARCHAR(500) COMMENT 'AI 建议门槛与理由(格式:建议{N}分:{理由})',
+    threshold_confirmed_by BIGINT COMMENT '门槛确认人 sys_user.id',
+    threshold_confirmed_at DATETIME COMMENT '门槛确认时间(NULL=未确认,禁止一切自动外发)',
     source        VARCHAR(20) NOT NULL DEFAULT 'LOCAL' COMMENT 'LOCAL=系统创建/SYNCED=猎聘同步',
     created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP

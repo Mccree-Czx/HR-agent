@@ -5,10 +5,12 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hragent.entity.Candidate;
 import com.hragent.entity.GreetingRecord;
+import com.hragent.entity.Jd;
 import com.hragent.entity.LiepinAccount;
 import com.hragent.entity.ResumeFile;
 import com.hragent.repository.CandidateMapper;
 import com.hragent.repository.GreetingRecordMapper;
+import com.hragent.repository.JdMapper;
 import com.hragent.repository.LiepinAccountMapper;
 import com.hragent.repository.ResumeFileMapper;
 import com.hragent.storage.StorageService;
@@ -22,6 +24,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -56,6 +59,9 @@ class ResumeCollectServiceTest {
     @Autowired
     private StorageService storageService;
 
+    @Autowired
+    private JdMapper jdMapper;
+
     @MockitoBean
     private LiepinCommandService commandService;
 
@@ -71,17 +77,25 @@ class ResumeCollectServiceTest {
         greetingMapper.delete(new LambdaQueryWrapper<>());
         candidateMapper.delete(new LambdaQueryWrapper<>());
         accountMapper.delete(new LambdaQueryWrapper<>());
+        jdMapper.delete(new LambdaQueryWrapper<>());
 
         account = new LiepinAccount();
         account.setName("账号");
         account.setLoginStatus("NORMAL");
         accountMapper.insert(account);
 
+        // 来源岗位:已确认门槛(外发前提)
+        Jd jd = new Jd();
+        jd.setTitle("测试岗位");
+        jd.setScoreThreshold(60);
+        jd.setThresholdConfirmedAt(LocalDateTime.now());
+        jdMapper.insert(jd);
+
         candidate = new Candidate();
         candidate.setResumeId("r1");
         candidate.setName("张三");
         candidate.setSnapshot("{\"name\":\"张三\",\"user_id\":\"u1\",\"im_id\":\"im1\"}");
-        candidate.setJdId(1L);
+        candidate.setJdId(jd.getId());
         candidate.setPassStatus("PASS");
         candidateMapper.insert(candidate);
 
@@ -149,5 +163,24 @@ class ResumeCollectServiceTest {
         // 再次保存 → 更新而非新增(去重)
         resumeCollectService.saveResumeFile(candidate.getId(), "简历.pdf", content, "application/pdf");
         assertEquals(1, resumeFileMapper.selectCount(null));
+    }
+
+    @Test
+    void requestResumeBlockedWhenThresholdUnconfirmed() throws Exception {
+        // 来源岗位未确认门槛 → 绝不索要简历,不改状态(fail-closed)
+        Jd unconfirmed = new Jd();
+        unconfirmed.setTitle("未确认门槛岗位");
+        jdMapper.insert(unconfirmed);
+        candidate.setJdId(unconfirmed.getId());
+        candidateMapper.updateById(candidate);
+
+        when(commandService.chatlist(any(LiepinAccount.class), any(Duration.class)))
+                .thenReturn(List.of(objectMapper.readTree(
+                        "{\"user_id\":\"u1\",\"im_id\":\"im1\",\"direction\":\"1\"}")));
+
+        resumeCollectService.collectOne(record, candidate);
+
+        verify(commandService, never()).requestResume(any(), anyString(), any());
+        assertEquals("SENT", greetingMapper.selectById(record.getId()).getStatus(), "未确认门槛不得改状态");
     }
 }

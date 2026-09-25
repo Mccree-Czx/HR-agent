@@ -12,6 +12,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.time.LocalDateTime;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -31,7 +32,7 @@ class CapabilityContractTest {
     private final SearchTaskService search = new SearchTaskService(tasks, jobs, accounts, candidates,
             commands, queue, new HrAgentProperties(), notify);
     private final ResumeCollectService collect = new ResumeCollectService(greetings, candidates, accounts,
-            mock(ResumeFileMapper.class), commands, mock(StorageService.class));
+            mock(ResumeFileMapper.class), commands, mock(StorageService.class), jobs);
     private LiepinAccount account;
     private Jd jd;
     private SearchTask task;
@@ -45,6 +46,7 @@ class CapabilityContractTest {
         jd = new Jd();
         jd.setId(2L);
         jd.setLiepinJobId("101");
+        jd.setThresholdConfirmedAt(LocalDateTime.now());
         task = new SearchTask();
         task.setId(3L);
         task.setAccountId(1L);
@@ -96,6 +98,7 @@ class CapabilityContractTest {
         c.setId(4L);
         c.setResumeId("resume-mock-1");
         c.setSnapshot("{\"im_id\":\"im-mock-1\"}");
+        c.setJdId(2L);
         return c;
     }
 

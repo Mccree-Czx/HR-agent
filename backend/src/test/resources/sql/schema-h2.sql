@@ -17,6 +17,10 @@ CREATE TABLE IF NOT EXISTS jd (
     publish_status VARCHAR(20) NOT NULL DEFAULT 'NOT_PUBLISHED',
     liepin_job_id VARCHAR(50),
     publish_error VARCHAR(500),
+    score_threshold INT,
+    threshold_suggestion VARCHAR(500),
+    threshold_confirmed_by BIGINT,
+    threshold_confirmed_at DATETIME,
     source        VARCHAR(20) NOT NULL DEFAULT 'LOCAL',
     created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP

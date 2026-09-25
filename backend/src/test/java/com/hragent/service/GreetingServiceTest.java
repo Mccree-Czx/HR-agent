@@ -18,6 +18,8 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -72,11 +74,13 @@ class GreetingServiceTest {
         account.setDailyGreetQuota(50);
         accountMapper.insert(account);
 
-        // 来源岗位:已关联猎聘职位
+        // 来源岗位:已关联猎聘职位 + 已确认门槛(外发前提)
         Jd jd = new Jd();
         jd.setTitle("招聘主管");
         jd.setLiepinJobId("85869365");
         jd.setPublishStatus("PUBLISHED");
+        jd.setScoreThreshold(60);
+        jd.setThresholdConfirmedAt(LocalDateTime.now());
         jdMapper.insert(jd);
         jdId = jd.getId();
 
@@ -114,6 +118,7 @@ class GreetingServiceTest {
         // 来源岗位未关联猎聘职位 → 跳过,不发送不落库
         Jd noJob = new Jd();
         noJob.setTitle("未发布岗位");
+        noJob.setThresholdConfirmedAt(LocalDateTime.now());
         jdMapper.insert(noJob);
 
         Candidate c = candidate(1);
@@ -152,16 +157,47 @@ class GreetingServiceTest {
     }
 
     @Test
-    void quotaExhaustedStopsSending() {
-        account.setDailyGreetQuota(1);
+    void quotaNoLongerBlocksSending() {
+        // 设计:取消系统自设的每日打招呼配额拦截;quota=0 仍应正常外发
+        account.setDailyGreetQuota(0);
         accountMapper.updateById(account);
 
         Candidate c1 = candidate(1);
         Candidate c2 = candidate(2);
-        assertTrue(greetingService.tryGreet(account, c1), "配额内应发送");
-        assertFalse(greetingService.tryGreet(account, c2), "超配额应拒绝");
+        assertTrue(greetingService.tryGreet(account, c1), "配额字段不再拦截发送");
+        assertTrue(greetingService.tryGreet(account, c2), "配额字段不再拦截发送");
 
-        assertEquals(1, greetingMapper.selectCount(null));
+        assertEquals(2, greetingMapper.selectCount(new LambdaQueryWrapper<GreetingRecord>()
+                .eq(GreetingRecord::getStatus, "SENT")), "配额已不再拦截,两人均发送");
+    }
+
+    @Test
+    void unconfirmedThresholdBlocksGreeting() {
+        // 来源岗位未确认门槛 → 绝不外发,不生成任何记录(fail-closed)
+        Jd unconfirmed = new Jd();
+        unconfirmed.setTitle("未确认门槛岗位");
+        unconfirmed.setLiepinJobId("85860000");
+        unconfirmed.setPublishStatus("PUBLISHED");
+        jdMapper.insert(unconfirmed);
+
+        Candidate c = candidate(1);
+        c.setJdId(unconfirmed.getId());
+        candidateMapper.updateById(c);
+
+        assertFalse(greetingService.tryGreet(account, c), "未确认门槛应跳过外发");
+        verify(commandService, never()).greet(any(), anyString(), anyString(), anyString(), any());
+        assertEquals(0, greetingMapper.selectCount(null), "未确认门槛不得生成任何记录");
+    }
+
+    @Test
+    void missingJdBlocksGreeting() {
+        Candidate c = candidate(1);
+        c.setJdId(999999L);
+        candidateMapper.updateById(c);
+
+        assertFalse(greetingService.tryGreet(account, c), "来源岗位不存在应跳过外发");
+        verify(commandService, never()).greet(any(), anyString(), anyString(), anyString(), any());
+        assertEquals(0, greetingMapper.selectCount(null));
     }
 
     @Test

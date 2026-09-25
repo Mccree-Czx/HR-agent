@@ -18,6 +18,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.annotation.Transactional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -55,7 +56,7 @@ class ScoringEngineTest {
         scoreRecordMapper.delete(new LambdaQueryWrapper<>());
 
         jd = new Jd();
-        jd.setTitle("Java 后端工程师");
+        jd.setTitle("软件工程师");
         jd.setExternalJd("负责后端服务开发,熟悉 SpringBoot/MySQL");
         jd.setSalaryMin(20000);
         jd.setSalaryMax(35000);
@@ -78,7 +79,7 @@ class ScoringEngineTest {
         when(aiClient.chat(anyString(), anyString()))
                 .thenReturn("{\"score\":75,\"pass\":true,\"summary\":\"匹配良好\",\"reasons\":[\"技能吻合\",\"薪资合适\"]}");
 
-        Candidate c = candidate("{\"name\":\"张三\",\"salary\":\"20-30K\",\"city\":\"北京\",\"experience\":\"5年\"}");
+        Candidate c = candidate("{\"name\":\"张三\",\"salary\":\"20-30K\",\"city\":\"北京\",\"experience\":\"5年\",\"want_title\":\"软件工程师\"}");
         ScoreRecord record = scoringEngine.scoreAndSave(c.getId());
 
         assertEquals(75, record.getScore());
@@ -94,7 +95,7 @@ class ScoringEngineTest {
                 .thenReturn("这不是 JSON")
                 .thenReturn("{\"score\":60,\"pass\":true,\"summary\":\"ok\",\"reasons\":[\"a\"]}");
 
-        Candidate c = candidate("{\"name\":\"张三\",\"salary\":\"20-30K\"}");
+        Candidate c = candidate("{\"name\":\"张三\",\"salary\":\"20-30K\",\"want_title\":\"软件工程师\"}");
         scoringEngine.scoreAndSave(c.getId());
 
         verify(aiClient, times(2)).chat(anyString(), anyString());
@@ -105,7 +106,7 @@ class ScoringEngineTest {
     void parseFailureExhaustsRetryThenFails() {
         when(aiClient.chat(anyString(), anyString())).thenReturn("永远不是 JSON");
 
-        Candidate c = candidate("{\"name\":\"张三\",\"salary\":\"20-30K\"}");
+        Candidate c = candidate("{\"name\":\"张三\",\"salary\":\"20-30K\",\"want_title\":\"软件工程师\"}");
         assertThrows(BizException.class, () -> scoringEngine.scoreAndSave(c.getId()));
         // 1 次原始 + maxParseRetry 次重试 = 3 次
         verify(aiClient, times(3)).chat(anyString(), anyString());
@@ -115,7 +116,7 @@ class ScoringEngineTest {
     @Test
     void preFilterSkipsModelWhenSalaryTooHigh() {
         // 期望薪资下限 45K > 35K * 1.5 = 52.5K? 45K 未超。用 60K
-        Candidate c = candidate("{\"name\":\"张三\",\"salary\":\"60-80K\",\"city\":\"北京\"}");
+        Candidate c = candidate("{\"name\":\"张三\",\"salary\":\"60-80K\",\"city\":\"北京\",\"want_title\":\"软件工程师\"}");
         scoringEngine.scoreAndSave(c.getId());
 
         verify(aiClient, never()).chat(anyString(), anyString());
@@ -128,7 +129,7 @@ class ScoringEngineTest {
     void preFilterAllowsNormalSalary() {
         when(aiClient.chat(anyString(), anyString()))
                 .thenReturn("{\"score\":70,\"pass\":true,\"summary\":\"ok\",\"reasons\":[\"a\"]}");
-        Candidate c = candidate("{\"name\":\"张三\",\"salary\":\"20-30K\",\"city\":\"北京\"}");
+        Candidate c = candidate("{\"name\":\"张三\",\"salary\":\"20-30K\",\"city\":\"北京\",\"want_title\":\"软件工程师\"}");
         scoringEngine.scoreAndSave(c.getId());
         verify(aiClient, times(1)).chat(anyString(), anyString());
     }
@@ -140,5 +141,41 @@ class ScoringEngineTest {
         assertEquals(30000, scoringEngine.parseSalaryMin("30K"));
         assertEquals(null, scoringEngine.parseSalaryMin("面议"));
         assertEquals(null, scoringEngine.parseSalaryMin(""));
+    }
+
+    @Test
+    void jobMatchMismatchFailsWithoutCallingModel() {
+        // 期望职能明确不匹配(hr) vs 目标(software) → 直接 FAIL,不调 AI
+        Candidate c = candidate("{\"name\":\"张三\",\"salary\":\"20-30K\",\"want_title\":\"人力资源总监\"}");
+        scoringEngine.scoreAndSave(c.getId());
+
+        verify(aiClient, never()).chat(anyString(), anyString());
+        Candidate after = candidateMapper.selectById(c.getId());
+        assertEquals("FAIL", after.getPassStatus());
+        assertEquals(0, after.getScore());
+    }
+
+    @Test
+    void jobUnknownStaysPendingAndNeverPass() {
+        // 缺期望字段 → 职能待确认 → PENDING 且绝不 PASS,不调 AI
+        Candidate c = candidate("{\"name\":\"张三\",\"salary\":\"20-30K\"}");
+        scoringEngine.scoreAndSave(c.getId());
+
+        verify(aiClient, never()).chat(anyString(), anyString());
+        Candidate after = candidateMapper.selectById(c.getId());
+        assertEquals("PENDING", after.getPassStatus());
+        assertNotEquals("PASS", after.getPassStatus());
+        ScoreRecord record = scoreRecordMapper.selectOne(new LambdaQueryWrapper<>());
+        assertTrue(record.getReason().contains("职能待确认"), "score_record.reason 应标记职能待确认");
+    }
+
+    @Test
+    void jobMatchContinuesToAi() {
+        when(aiClient.chat(anyString(), anyString()))
+                .thenReturn("{\"score\":80,\"pass\":true,\"summary\":\"ok\",\"reasons\":[\"a\"]}");
+        Candidate c = candidate("{\"name\":\"张三\",\"salary\":\"20-30K\",\"want_title\":\"软件工程师\"}");
+        scoringEngine.scoreAndSave(c.getId());
+        verify(aiClient, times(1)).chat(anyString(), anyString());
+        assertEquals("PASS", candidateMapper.selectById(c.getId()).getPassStatus());
     }
 }

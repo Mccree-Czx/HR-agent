@@ -7,10 +7,12 @@ import java.util.List;
 
 /**
  * 评分结果(评审 P2-11:结构化输出,字段级校验在 fromJson 中完成)。
+ * pending=true 表示因前置门禁(如期望职能待确认)无法定论,须置 PENDING 且绝不判为通过。
  */
 public record ScoreResult(
         int score,
         boolean pass,
+        boolean pending,
         String summary,
         List<String> reasons) {
 
@@ -45,11 +47,16 @@ public record ScoreResult(
                 reasons.add(r.asText(""));
             }
         }
-        return new ScoreResult(score, pass, summary, reasons);
+        return new ScoreResult(score, pass, false, summary, reasons);
     }
 
     /** 预筛失败的快捷构造(不调模型) */
     public static ScoreResult preFilteredFail(String reason) {
-        return new ScoreResult(0, false, reason, List.of(reason));
+        return new ScoreResult(0, false, false, reason, List.of(reason));
+    }
+
+    /** 待确认的快捷构造(不调模型,不判通过):如期望职能证据缺失 */
+    public static ScoreResult pending(String reason) {
+        return new ScoreResult(0, false, true, reason, List.of(reason));
     }
 }

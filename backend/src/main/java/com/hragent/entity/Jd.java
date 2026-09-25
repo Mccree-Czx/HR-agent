@@ -50,6 +50,18 @@ public class Jd {
 
     private String publishError;
 
+    /** 已确认的评分通过门槛(1-100);NULL=未确认(禁止外发) */
+    private Integer scoreThreshold;
+
+    /** AI 建议门槛与理由(格式:建议{N}分:{理由}) */
+    private String thresholdSuggestion;
+
+    /** 门槛确认人 sys_user.id */
+    private Long thresholdConfirmedBy;
+
+    /** 门槛确认时间;非空=已确认(允许自动外发) */
+    private LocalDateTime thresholdConfirmedAt;
+
     /** LOCAL=系统创建 / SYNCED=猎聘同步 */
     private String source;
 

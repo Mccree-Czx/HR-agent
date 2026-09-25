@@ -1,0 +1,124 @@
+package com.hragent.scoring;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.Test;
+
+import java.util.List;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+/**
+ * 期望职能三态判定纯函数测试(与 CLI resume.ts 的用例集对齐,证明口径一致):
+ * MATCH / MISMATCH / UNKNOWN,且 UNKNOWN/MISMATCH 一律 canContinueScoring=false。
+ */
+class JobMatchEvaluatorTest {
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    private JobMatchEvaluator.Status status(List<String> expectations, String target) {
+        return JobMatchEvaluator.evaluate(expectations, target).status();
+    }
+
+    @Test
+    void higherHardwareMatchesHardwareTarget() {
+        assertEquals(JobMatchEvaluator.Status.MATCH, status(List.of("高级硬件工程师"), "硬件研发工程师"));
+    }
+
+    @Test
+    void hrExpectationMismatchesHardwareTarget() {
+        assertEquals(JobMatchEvaluator.Status.MISMATCH, status(List.of("人力资源总监"), "硬件工程师"));
+    }
+
+    @Test
+    void multipleExpectationsAnyMatchPasses() {
+        assertEquals(JobMatchEvaluator.Status.MATCH,
+                status(List.of("人力资源总监", "高级硬件工程师"), "硬件研发工程师"));
+    }
+
+    @Test
+    void multipleExplicitExpectationsAllMismatch() {
+        assertEquals(JobMatchEvaluator.Status.MISMATCH,
+                status(List.of("人力资源总监", "招聘经理"), "硬件工程师"));
+    }
+
+    @Test
+    void unmappedEngineerNotGeneralized() {
+        assertEquals(JobMatchEvaluator.Status.UNKNOWN, status(List.of("工程师"), "硬件工程师"));
+    }
+
+    @Test
+    void softwareExpectationMismatchesHardwareTarget() {
+        assertEquals(JobMatchEvaluator.Status.MISMATCH, status(List.of("软件工程师"), "硬件工程师"));
+    }
+
+    @Test
+    void unknownDirectionCannotAssertAllMismatch() {
+        assertEquals(JobMatchEvaluator.Status.UNKNOWN,
+                status(List.of("招聘经理", "未映射方向"), "硬件工程师"));
+    }
+
+    @Test
+    void emptyOrMissingExpectationsAreUnknown() {
+        assertEquals(JobMatchEvaluator.Status.UNKNOWN, status(List.of(), "硬件工程师"));
+        assertEquals(JobMatchEvaluator.Status.UNKNOWN, status(null, "硬件工程师"));
+    }
+
+    @Test
+    void emptyOrUnmappedTargetIsUnknown() {
+        assertEquals(JobMatchEvaluator.Status.UNKNOWN, status(List.of("高级硬件工程师"), ""));
+        assertEquals(JobMatchEvaluator.Status.UNKNOWN, status(List.of("高级硬件工程师"), "产品经理"));
+    }
+
+    @Test
+    void classificationEvidenceConflictIsUnknown() {
+        // 已核实分类与明确职位映射冲突 → UNKNOWN(不能被另一个匹配覆盖)
+        assertEquals(JobMatchEvaluator.Status.UNKNOWN,
+                JobMatchEvaluator.evaluate(List.of("高级硬件工程师"), Map.of("高级硬件工程师", "hr"), "硬件工程师").status());
+        assertEquals(JobMatchEvaluator.Status.UNKNOWN,
+                JobMatchEvaluator.evaluate(List.of("硬件工程师"), Map.of("硬件工程师", "hr"), "硬件工程师").status());
+    }
+
+    @Test
+    void onlyMatchAllowsContinueScoring() {
+        assertTrue(JobMatchEvaluator.evaluate(List.of("高级硬件工程师"), "硬件研发工程师").canContinueScoring());
+        assertFalse(JobMatchEvaluator.evaluate(List.of("人力资源总监"), "硬件工程师").canContinueScoring());
+        assertFalse(JobMatchEvaluator.evaluate(List.of("工程师"), "硬件工程师").canContinueScoring());
+    }
+
+    @Test
+    void snapshotWantTitleDrivesMatch() throws Exception {
+        var snapshot = objectMapper.readTree(
+                "{\"title\":\"硬件工程师\",\"current_title\":\"硬件工程师\",\"want_title\":\"高级硬件工程师\"}");
+        assertEquals(JobMatchEvaluator.Status.MATCH,
+                JobMatchEvaluator.evaluateFromSnapshot(snapshot, "硬件研发工程师").status());
+    }
+
+    @Test
+    void snapshotCurrentTitleNeverSubstitutesExpectation() throws Exception {
+        var snapshot = objectMapper.readTree("{\"title\":\"硬件工程师\",\"current_title\":\"硬件工程师\"}");
+        assertEquals(JobMatchEvaluator.Status.UNKNOWN,
+                JobMatchEvaluator.evaluateFromSnapshot(snapshot, "硬件工程师").status());
+    }
+
+    @Test
+    void snapshotMalformedExpectationsAreUnknown() throws Exception {
+        var notArray = objectMapper.readTree("{\"expectation_evidence\":{\"entries\":\"高级硬件工程师\"}}");
+        assertEquals(JobMatchEvaluator.Status.UNKNOWN,
+                JobMatchEvaluator.evaluateFromSnapshot(notArray, "硬件工程师").status());
+
+        var brokenEntry = objectMapper.readTree("{\"expectation_evidence\":{\"entries\":[{\"title\":42}]}}");
+        assertEquals(JobMatchEvaluator.Status.UNKNOWN,
+                JobMatchEvaluator.evaluateFromSnapshot(brokenEntry, "硬件工程师").status());
+    }
+
+    @Test
+    void snapshotWrongEvidenceSourceIsUnknown() throws Exception {
+        var snapshot = objectMapper.readTree(
+                "{\"expectation_evidence\":{\"source\":\"baseInfo.title\",\"entries\":[{\"title\":\"高级硬件工程师\"}]}}");
+        assertEquals(JobMatchEvaluator.Status.UNKNOWN,
+                JobMatchEvaluator.evaluateFromSnapshot(snapshot, "硬件研发工程师").status());
+    }
+}

@@ -3,8 +3,10 @@ package com.hragent.controller;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.hragent.common.ApiResponse;
 import com.hragent.entity.Jd;
+import com.hragent.security.UserContext;
 import com.hragent.service.JdPublishService;
 import com.hragent.service.JdService;
+import com.hragent.service.JdThresholdService;
 import com.hragent.service.LiepinJobSyncService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -24,12 +26,14 @@ public class JdController {
     private final JdService jdService;
     private final JdPublishService jdPublishService;
     private final LiepinJobSyncService jobSyncService;
+    private final JdThresholdService thresholdService;
 
     public JdController(JdService jdService, JdPublishService jdPublishService,
-                        LiepinJobSyncService jobSyncService) {
+                        LiepinJobSyncService jobSyncService, JdThresholdService thresholdService) {
         this.jdService = jdService;
         this.jdPublishService = jdPublishService;
         this.jobSyncService = jobSyncService;
+        this.thresholdService = thresholdService;
     }
 
     @GetMapping
@@ -72,5 +76,23 @@ public class JdController {
     public ApiResponse<java.util.Map<String, Integer>> syncLiepin(
             @RequestParam(required = false) Long accountId) {
         return ApiResponse.ok(jobSyncService.sync(accountId));
+    }
+
+    /** AI 生成建议门槛与理由(仅建议,不构成确认) */
+    @PostMapping("/{id}/threshold/suggest")
+    public ApiResponse<String> suggestThreshold(@PathVariable Long id) {
+        return ApiResponse.ok(thresholdService.suggest(id));
+    }
+
+    /** 人工确认门槛(1..100);确认后该岗位才允许自动外发 */
+    @PutMapping("/{id}/threshold/confirm")
+    public ApiResponse<Jd> confirmThreshold(@PathVariable Long id,
+                                            @RequestBody ThresholdConfirmRequest request) {
+        Long userId = UserContext.get() == null ? null : UserContext.get().getUserId();
+        return ApiResponse.ok(thresholdService.confirm(id, request.threshold(), userId));
+    }
+
+    /** 门槛确认请求体 */
+    public record ThresholdConfirmRequest(int threshold) {
     }
 }

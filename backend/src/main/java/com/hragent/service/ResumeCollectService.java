@@ -4,11 +4,13 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.hragent.entity.Candidate;
 import com.hragent.entity.GreetingRecord;
+import com.hragent.entity.Jd;
 import com.hragent.entity.LiepinAccount;
 import com.hragent.entity.ResumeFile;
 import com.hragent.executor.JsonExtractor;
 import com.hragent.repository.CandidateMapper;
 import com.hragent.repository.GreetingRecordMapper;
+import com.hragent.repository.JdMapper;
 import com.hragent.repository.LiepinAccountMapper;
 import com.hragent.repository.ResumeFileMapper;
 import com.hragent.storage.StorageService;
@@ -40,16 +42,19 @@ public class ResumeCollectService {
     private final ResumeFileMapper resumeFileMapper;
     private final LiepinCommandService commandService;
     private final StorageService storageService;
+    private final JdMapper jdMapper;
 
     public ResumeCollectService(GreetingRecordMapper greetingMapper, CandidateMapper candidateMapper,
                                 LiepinAccountMapper accountMapper, ResumeFileMapper resumeFileMapper,
-                                LiepinCommandService commandService, StorageService storageService) {
+                                LiepinCommandService commandService, StorageService storageService,
+                                JdMapper jdMapper) {
         this.greetingMapper = greetingMapper;
         this.candidateMapper = candidateMapper;
         this.accountMapper = accountMapper;
         this.resumeFileMapper = resumeFileMapper;
         this.commandService = commandService;
         this.storageService = storageService;
+        this.jdMapper = jdMapper;
     }
 
     /**
@@ -130,6 +135,12 @@ public class ResumeCollectService {
     /** 索要简历并更新打招呼记录状态 */
     private void requestResume(LiepinAccount account, Candidate candidate,
                                GreetingRecord record, Duration timeout) {
+        // 门槛门禁(fail-closed):来源岗位未确认门槛 → 绝不外发索要,不改任何状态
+        Jd jd = candidate.getJdId() == null ? null : jdMapper.selectById(candidate.getJdId());
+        if (jd == null || jd.getThresholdConfirmedAt() == null) {
+            log.warn("岗位未确认门槛,跳过索要简历(候选人 {}, JD {})", candidate.getId(), candidate.getJdId());
+            return;
+        }
         String resumeId = candidate.getResumeId();
         if (resumeId == null || resumeId.isBlank()) {
             log.warn("候选人 {} 缺少 resume_id,无法索要简历", candidate.getId());
