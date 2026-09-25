@@ -13,8 +13,11 @@ import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -40,6 +43,8 @@ public class JdPublishService {
     private final LiepinAccountMapper accountMapper;
     private final LiepinCommandService commandService;
     private final ObjectMapper objectMapper = new ObjectMapper();
+    /** 正在删除中的岗位(轻量互斥,防连点/并发重复删除) */
+    private final Set<Long> deletingJds = ConcurrentHashMap.newKeySet();
 
     public JdPublishService(JdMapper jdMapper, LiepinAccountMapper accountMapper,
                             LiepinCommandService commandService) {
@@ -102,6 +107,17 @@ public class JdPublishService {
 
     /** 删除岗位:有关联猎聘职位时先删猎聘,成功后删系统记录;失败保留系统记录 */
     public void deleteWithSync(Long jdId) {
+        if (!deletingJds.add(jdId)) {
+            throw BizException.badRequest("该岗位正在删除中,请稍后");
+        }
+        try {
+            doDeleteWithSync(jdId);
+        } finally {
+            deletingJds.remove(jdId);
+        }
+    }
+
+    private void doDeleteWithSync(Long jdId) {
         Jd jd = jdMapper.selectById(jdId);
         if (jd == null) {
             throw BizException.notFound("岗位不存在");
@@ -115,17 +131,47 @@ public class JdPublishService {
             if (account == null) {
                 throw BizException.badRequest("无可用猎聘账号(NORMAL),无法同步删除猎聘职位");
             }
-            Optional<JsonNode> result = commandService.jobDelete(account, jobId, Duration.ofMinutes(3));
-            JsonNode node = result.orElseThrow(
-                    () -> new IllegalStateException("jobdelete 无有效 JSON 输出"));
-            if (!node.path("success").asBoolean(false)) {
-                throw BizException.badRequest("猎聘职位删除失败: "
-                        + node.path("message").asText("未知原因") + ",系统记录已保留");
+
+            boolean deleted = false;
+            String error = null;
+            try {
+                Optional<JsonNode> result = commandService.jobDelete(account, jobId, Duration.ofMinutes(3));
+                JsonNode node = result.orElseThrow(
+                        () -> new IllegalStateException("jobdelete 无有效 JSON 输出"));
+                if (node.path("success").asBoolean(false)) {
+                    deleted = true;
+                } else {
+                    error = node.path("message").asText("未知原因");
+                }
+            } catch (Exception e) {
+                error = e.getMessage();
+            }
+
+            if (!deleted) {
+                // 复核机制:删除命令报错时(如风控特征误判),查猎聘实际状态;已不存在则视为删除成功
+                if (confirmDeletedOnLiepin(account, jobId)) {
+                    log.warn("删除命令报错({})但复核确认猎聘职位 {} 已不存在,视为删除成功", error, jobId);
+                    deleted = true;
+                }
+            }
+            if (!deleted) {
+                throw BizException.badRequest("猎聘职位删除失败: " + error + ",系统记录已保留");
             }
             log.info("猎聘职位 {} 已删除(随岗位「{}」同步删除)", jobId, jd.getTitle());
         }
         jdMapper.deleteById(jdId);
         log.info("岗位「{}」(id={}) 已删除", jd.getTitle(), jdId);
+    }
+
+    /** 复核:目标职位是否已不在猎聘列表(不存在 → 删除已完成);复核失败一律返回 false(保守) */
+    private boolean confirmDeletedOnLiepin(LiepinAccount account, String jobId) {
+        try {
+            List<JsonNode> jobs = commandService.jobList(account, Duration.ofMinutes(2));
+            return jobs.stream().noneMatch(j -> jobId.equals(j.path("jobId").asText("")));
+        } catch (Exception e) {
+            log.warn("猎聘职位复核失败(维持保留): {}", e.getMessage());
+            return false;
+        }
     }
 
     private void validate(Jd jd) {

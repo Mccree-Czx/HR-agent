@@ -16,6 +16,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -151,9 +152,13 @@ class JdPublishServiceTest {
 
     @Test
     void deleteAbortsAndKeepsRecordWhenLiepinFails() throws Exception {
+        // 删除命令失败 + 复核确认职位仍在猎聘 → 保留系统记录
         when(commandService.jobDelete(any(), anyString(), any(Duration.class)))
                 .thenReturn(Optional.of(objectMapper.readTree(
                         "{\"success\":false,\"message\":\"网络错误\"}")));
+        when(commandService.jobList(any(), any(Duration.class)))
+                .thenReturn(List.of(objectMapper.readTree(
+                        "{\"title\":\"招聘主管\",\"jobId\":\"85869999\",\"status\":\"招聘中\"}")));
 
         Jd jd = createJd();
         jd.setLiepinJobId("85869999");
@@ -161,6 +166,44 @@ class JdPublishServiceTest {
         jdMapper.updateById(jd);
 
         assertThrows(BizException.class, () -> jdPublishService.deleteWithSync(jd.getId()));
-        assertEquals(1, jdMapper.selectCount(null), "猎聘删除失败时应保留系统记录");
+        assertEquals(1, jdMapper.selectCount(null), "猎聘删除失败且职位仍在时应保留系统记录");
+    }
+
+    @Test
+    void deleteRecheckPassesWhenJobGoneFromLiepin() throws Exception {
+        // 删除命令报错(如风控特征误判),但复核发现猎聘上已不存在 → 视为成功,删系统记录
+        when(commandService.jobDelete(any(), anyString(), any(Duration.class)))
+                .thenThrow(new com.hragent.executor.CliException(
+                        com.hragent.executor.CliException.Type.RISK_CONTROL, "检测到风控拦截特征 [安全验证]"));
+        when(commandService.jobList(any(), any(Duration.class)))
+                .thenReturn(List.of(objectMapper.readTree(
+                        "{\"title\":\"其他职位\",\"jobId\":\"11111\",\"status\":\"招聘中\"}")));
+
+        Jd jd = createJd();
+        jd.setLiepinJobId("85869999");
+        jd.setPublishStatus("PUBLISHED");
+        jdMapper.updateById(jd);
+
+        jdPublishService.deleteWithSync(jd.getId());
+        assertEquals(0, jdMapper.selectCount(null), "复核确认职位已不存在后应删系统记录");
+    }
+
+    @Test
+    void deleteRecheckFailsWhenRecheckUnavailable() throws Exception {
+        // 删除命令失败且复核也不可用 → 保守保留
+        when(commandService.jobDelete(any(), anyString(), any(Duration.class)))
+                .thenThrow(new com.hragent.executor.CliException(
+                        com.hragent.executor.CliException.Type.RISK_CONTROL, "安全验证"));
+        when(commandService.jobList(any(), any(Duration.class)))
+                .thenThrow(new com.hragent.executor.CliException(
+                        com.hragent.executor.CliException.Type.RISK_CONTROL, "安全验证"));
+
+        Jd jd = createJd();
+        jd.setLiepinJobId("85869999");
+        jd.setPublishStatus("PUBLISHED");
+        jdMapper.updateById(jd);
+
+        assertThrows(BizException.class, () -> jdPublishService.deleteWithSync(jd.getId()));
+        assertEquals(1, jdMapper.selectCount(null), "复核不可用时保留系统记录");
     }
 }

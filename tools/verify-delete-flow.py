@@ -24,7 +24,7 @@ print('[1] 登录 OK')
 
 # 2. 发布临时测试职位(通过 fork CLI)
 data_json = json.dumps({
-    'title': '测试勿投-闭环验证2',
+    'title': '测试勿投-复核验证',
     'jobCategory': 'N000330',
     'description': '系统删除同步功能闭环验证使用,验证后自动删除,请勿投递。',
     'salaryMinK': 12, 'salaryMaxK': 18,
@@ -43,7 +43,7 @@ print(f"[2] 临时职位已发布: job_id={job_id}")
 
 # 3. 系统创建 JD 并关联该职位(模拟系统发布的岗位)
 jd = req('POST', '/jd', {
-    'title': '测试勿投-闭环验证2',
+    'title': '测试勿投-复核验证',
     'externalJd': '验证用',
     'salaryMin': 12000, 'salaryMax': 18000,
 }, token=token)['data']

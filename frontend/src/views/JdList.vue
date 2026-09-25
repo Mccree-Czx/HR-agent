@@ -49,7 +49,7 @@
         <template #default="{ row }">
           <el-button link type="warning" :disabled="row.publishStatus === 'PUBLISHED' || row.publishStatus === 'PUBLISHING'" :loading="row._publishing" @click="handlePublish(row)">发布到猎聘</el-button>
           <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
-          <el-button link type="danger" @click="handleDelete(row)">删除</el-button>
+          <el-button link type="danger" :loading="row._deleting" @click="handleDelete(row)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -183,9 +183,14 @@ async function handleDelete(row) {
     '删除确认',
     { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' }
   )
-  await jdApi.remove(row.id)
-  ElMessage.success(row.liepinJobId ? '已删除(含猎聘职位)' : '已删除')
-  load(pageNo.value)
+  row._deleting = true
+  try {
+    await jdApi.remove(row.id)
+    ElMessage.success(row.liepinJobId ? '已删除(含猎聘职位)' : '已删除')
+    load(pageNo.value)
+  } finally {
+    row._deleting = false
+  }
 }
 
 async function handlePublish(row) {
