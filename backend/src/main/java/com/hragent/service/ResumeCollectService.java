@@ -110,6 +110,25 @@ public class ResumeCollectService {
         }
     }
 
+    /**
+     * 直接索要简历(不检测回复;供"对方已读我方消息"触发的索要路径,2026-09-26 新增)。
+     * 守卫(fail-closed):打招呼记录必须为 SENT(未索要);评分 PASS;门槛与 resume_id 校验复用私有 requestResume。
+     * 返回是否已确认发出(record 状态置 REQUESTED)。
+     */
+    public boolean requestResumeDirect(LiepinAccount account, Candidate candidate) {
+        GreetingRecord record = greetingMapper.selectOne(new LambdaQueryWrapper<GreetingRecord>()
+                .eq(GreetingRecord::getCandidateId, candidate.getId())
+                .last("LIMIT 1"));
+        if (record == null || !"SENT".equals(record.getStatus())) {
+            return false;
+        }
+        if (!"PASS".equals(candidate.getPassStatus())) {
+            return false;
+        }
+        requestResume(account, candidate, record, Duration.ofMinutes(2));
+        return "REQUESTED".equals(record.getStatus());
+    }
+
     /** 通过 chatlist 检测候选人是否回复(对方发来消息 direction=0) */
     boolean checkReply(LiepinAccount account, Candidate candidate, Duration timeout) {
         List<JsonNode> chats = commandService.chatlist(account, timeout);
@@ -150,7 +169,13 @@ public class ResumeCollectService {
         boolean confirmed = result.filter(node -> node.path("success").asBoolean(false)
                 && node.path("confirmed").asBoolean(false)).isPresent();
         if (!confirmed) {
-            log.warn("候选人 {} 索要未获确认,保留原状态", candidate.getId());
+            // 记录 CLI 返回详情(message / 按钮状态),区分"按钮不可点(已索要过/权益不足)"与"点击未确认"
+            String detail = result.map(node -> {
+                String message = node.path("message").asText("");
+                String button = node.path("button_text").asText("");
+                return message + (button.isEmpty() ? "" : "(按钮:" + button + ")");
+            }).orElse("无输出");
+            log.warn("候选人 {} 索要未获确认,保留原状态: {}", candidate.getId(), detail);
             return;
         }
         record.setStatus("REQUESTED");

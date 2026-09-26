@@ -121,16 +121,8 @@ public class ChatPollService {
      */
     public int pollOnce(LiepinAccount account) {
         Duration timeout = Duration.ofMinutes(properties.getLiepin().getShortTimeoutMinutes());
-        List<JsonNode> sessions;
-        try {
-            sessions = commandService.chatlist(account, timeout);
-        } catch (CliException e) {
-            // 风控/登录失效 → 中断本轮上抛;其余拉取失败只记日志,不阻断后续岗位处理
-            if (e.getType() == CliException.Type.RISK_CONTROL
-                    || e.getType() == CliException.Type.NOT_LOGGED_IN) {
-                throw e;
-            }
-            log.warn("来信会话列表拉取失败,本轮跳过来信处理: {}", e.getMessage());
+        List<JsonNode> sessions = fetchSessionsWithRetry(account, timeout);
+        if (sessions == null) {
             return 0;
         }
         int processed = 0;
@@ -154,6 +146,46 @@ public class ChatPollService {
         return processed;
     }
 
+    /**
+     * 拉取会话列表:非风控/登录类失败时等待片刻重试一次;仍失败返回 null(本轮跳过来信处理,不阻断后续岗位)。
+     * 2026-09-26 实测:chatlist 曾因页面级挂起连续两轮超时,回复/已读因此完全未被处理;轮内重试提升及时性。
+     */
+    private List<JsonNode> fetchSessionsWithRetry(LiepinAccount account, Duration timeout) {
+        try {
+            return commandService.chatlist(account, timeout);
+        } catch (CliException first) {
+            // 风控/登录失效 → 中断本轮上抛,由既有熔断链路处理
+            if (first.getType() == CliException.Type.RISK_CONTROL
+                    || first.getType() == CliException.Type.NOT_LOGGED_IN) {
+                throw first;
+            }
+            long delayMillis = Math.max(0, properties.getAutoRecruit().getPollRetryDelayMillis());
+            log.warn("来信会话列表拉取失败,{}ms 后重试一次: {}", delayMillis, first.getMessage());
+            sleepQuietly(delayMillis);
+            try {
+                return commandService.chatlist(account, timeout);
+            } catch (CliException retry) {
+                if (retry.getType() == CliException.Type.RISK_CONTROL
+                        || retry.getType() == CliException.Type.NOT_LOGGED_IN) {
+                    throw retry;
+                }
+                log.warn("来信会话列表重试仍失败,本轮跳过来信处理: {}", retry.getMessage());
+                return null;
+            }
+        }
+    }
+
+    private static void sleepQuietly(long millis) {
+        if (millis <= 0) {
+            return;
+        }
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     /** 处理单个会话;返回是否已产生落库/外发动作 */
     private boolean handleSession(LiepinAccount account, JsonNode session, Duration timeout) {
         String imId = session.path("im_id").asText("").trim();
@@ -171,28 +203,74 @@ public class ChatPollService {
             }
         }
         if (candidate != null) {
-            return handleKnownCandidate(account, candidate, imId, direction, timeout);
+            return handleKnownCandidate(account, candidate, imId, direction, session, timeout);
         }
         return handleStranger(account, session, imId, direction, timeout);
     }
 
-    /** 已知候选人:附件优先入库(不看分数);否则文本回复按门槛+评分索要 */
+    /**
+     * 已知候选人:附件优先入库(不看分数);文本回复按门槛+评分索要;
+     * 对方未回复但已读我方最新消息(会话级 oppositeRead=1)同样索要(不等回复,2026-09-26 新增)。
+     */
     private boolean handleKnownCandidate(LiepinAccount account, Candidate candidate, String imId,
-                                         String direction, Duration timeout) {
-        // 仅处理「候选人最后发言」的会话,避免无谓拉消息
-        if (!"1".equals(direction)) {
-            return false;
-        }
+                                         String direction, JsonNode session, Duration timeout) {
         // 去重键:resume_file 是否已有该候选人记录(服务端每次下载会重新生成 PDF,SHA-256 会变)
         if (hasResumeFile(candidate.getId())) {
             return false;
         }
-        List<JsonNode> messages = commandService.chatmsg(account, imId, timeout);
-        JsonNode attachment = findLatestAttachment(messages);
-        if (attachment != null) {
-            return downloadAndStore(account, candidate, imId, attachment, timeout);
+        if ("1".equals(direction)) {
+            // 候选人最后发言:拉消息,附件优先,否则按回复索要
+            List<JsonNode> messages = commandService.chatmsg(account, imId, timeout);
+            JsonNode attachment = findLatestAttachment(messages);
+            if (attachment != null) {
+                return downloadAndStore(account, candidate, imId, attachment, timeout);
+            }
+            return requestResumeForKnown(account, candidate, timeout);
         }
-        return requestResumeForKnown(account, candidate, timeout);
+        // 对方沉默:仅当"对方已读我方最新消息"时索要,不做其他动作(不拉消息,零额外平台请求)
+        if (isOppositeRead(session)) {
+            return requestResumeOnRead(account, candidate);
+        }
+        return false;
+    }
+
+    /** 已读即索要:记录/评分/门槛前置检查 → 账号节流 → 直接索要(不检测回复,复用既有守卫) */
+    private boolean requestResumeOnRead(LiepinAccount account, Candidate candidate) {
+        GreetingRecord record = greetingMapper.selectOne(new LambdaQueryWrapper<GreetingRecord>()
+                .eq(GreetingRecord::getCandidateId, candidate.getId())
+                .last("LIMIT 1"));
+        if (record == null || !"SENT".equals(record.getStatus())) {
+            // 无记录/已索要(REQUESTED/AGREED)/待确认/发送失败:均不触发
+            return false;
+        }
+        if (!"PASS".equals(candidate.getPassStatus())) {
+            log.debug("候选人 {} 非 PASS({}),已读也不索要", candidate.getId(), candidate.getPassStatus());
+            return false;
+        }
+        if (!thresholdConfirmed(candidate)) {
+            log.warn("岗位未确认门槛,跳过已读索要(候选人 {})", candidate.getId());
+            return false;
+        }
+        paceGuard.await(account);
+        boolean requested = resumeCollectService.requestResumeDirect(account, candidate);
+        if (requested) {
+            paceGuard.mark(account);
+            log.info("候选人 {} 已读我方消息,已触发索要简历", candidate.getId());
+        }
+        return requested;
+    }
+
+    /**
+     * 会话级已读标记:oppositeRead=1 表示"对方已读我方最新消息"(2026-09-26 以真实会话样本对照界面验证)。
+     * 字段缺失/null/其他值一律视为未知,不触发(不猜)。
+     */
+    private static boolean isOppositeRead(JsonNode session) {
+        JsonNode value = session.path("raw_metadata").path("oppositeRead");
+        if (value.isMissingNode() || value.isNull()) {
+            return false;
+        }
+        String text = value.asText("");
+        return "1".equals(text) || "true".equalsIgnoreCase(text);
     }
 
     /** 附件下载 → 校验 → 入库;任一步失败都只记日志、不写半状态(下轮重试) */

@@ -131,6 +131,9 @@ public class HrAgentProperties {
 
         /** 相邻两次简历详情读取的最小间隔(毫秒,读操作轻节流,默认 1000) */
         private int resumeDetailIntervalMillis = 1000;
+
+        /** 会话列表(chatlist)拉取失败后的轮内重试等待(毫秒,默认 20s;测试置 1) */
+        private int pollRetryDelayMillis = 20_000;
     }
 
     @Data

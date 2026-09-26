@@ -64,15 +64,49 @@ function mainSessionClient(page: Page): CdpMinimalClient | null {
   }
 }
 
+/** 步骤日志开关(排障用):LIEPIN_DEBUG_STEPS=true 时向 stderr 输出各步骤耗时,后端日志可捕获 */
+const DEBUG_STEPS = process.env.LIEPIN_DEBUG_STEPS === 'true';
+
+/** 打印排障步骤日志(仅在 LIEPIN_DEBUG_STEPS=true 时生效) */
+export function stepLog(message: string): void {
+  if (DEBUG_STEPS) console.error(`[liepin-step] ${message}`);
+}
+
+/**
+ * 给任意 Promise 包一层超时。
+ *
+ * CDP 协议调用(puppeteer 默认协议超时很长)与页面内 fetch/evaluate 均不会自行限时,
+ * 目标页无响应(如被弹窗/冻结阻塞)时会静默挂满超时上限(2026-09-26 实测:后端
+ * chatlist 两次耗尽 3 分钟命令超时被强杀且无任何输出)。凡可能挂起的调用一律套此函数,
+ * 快速失败并给出可诊断的错误。
+ */
+export function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} 超时(${ms}ms): 页面/CDP 无响应`)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 /**
  * 在 puppeteer 主会话上开关 Runtime 域。开关是按会话生效的，
  * 断开连接后自然消失，不会给浏览器留下残留状态。
  */
 export async function setPageRuntime(page: Page, enabled: boolean): Promise<void> {
   try {
-    await mainSessionClient(page)?.send(enabled ? 'Runtime.enable' : 'Runtime.disable');
+    const client = mainSessionClient(page);
+    if (!client) return;
+    await withTimeout(client.send(enabled ? 'Runtime.enable' : 'Runtime.disable'), 10_000, '切换 Runtime 域');
   } catch {
-    /* 主会话不可用时静默跳过，退化为普通导航 */
+    /* 主会话不可用/无响应时静默跳过，退化为普通导航 */
   }
 }
 
@@ -86,12 +120,15 @@ export async function setPageRuntime(page: Page, enabled: boolean): Promise<void
  * 所以 goto 前先 Runtime.disable，加载完成后立刻 enable 回来。
  */
 export async function safeGoto(page: Page, url: string): Promise<void> {
+  const startedAt = Date.now();
   await setPageRuntime(page, false);
   try {
-    await page.goto(url, { waitUntil: 'networkidle2' });
+    // 显式 30s 导航超时:puppeteer 默认导航超时为 30s,这里写死保证语义不随版本/全局设置漂移
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 30_000 });
   } finally {
     await setPageRuntime(page, true);
   }
+  stepLog(`goto ${url} 用时 ${Date.now() - startedAt}ms`);
 }
 
 /**
@@ -128,8 +165,10 @@ export async function lptFetch(page: Page, url: string, opts: { body?: string; c
   assertLptPageAlive(page, '发起请求');
 
   let result: any;
+  const startedAt = Date.now();
   try {
-    result = await page.evaluate(async (fetchUrl: string, fetchBody: string | null, fetchClientId: string, fetchTraceId: string) => {
+    // 页面内 fetch 无超时保护:目标页无响应时会永久挂起,统一 30s 快速失败
+    result = await withTimeout(page.evaluate(async (fetchUrl: string, fetchBody: string | null, fetchClientId: string, fetchTraceId: string) => {
     try {
       const xsrf = document.cookie.split(';').map(c => c.trim()).find(c => c.startsWith('XSRF-TOKEN='));
       const token = xsrf ? xsrf.split('=').slice(1).join('') : '';
@@ -159,7 +198,7 @@ export async function lptFetch(page: Page, url: string, opts: { body?: string; c
     } catch (e: any) {
       return { ok: false, status: 0, text: '', error: String(e?.message || e) };
     }
-  }, url, body, clientId, traceId);
+  }, url, body, clientId, traceId), 30_000, 'lptFetch 页内请求');
   } catch (e: any) {
     if (CONTEXT_DESTROYED_PATTERN.test(String(e?.message || e))) {
       assertLptPageAlive(page, '请求执行');
@@ -167,6 +206,7 @@ export async function lptFetch(page: Page, url: string, opts: { body?: string; c
     }
     throw e;
   }
+  stepLog(`lptFetch ${url} 页内请求用时 ${Date.now() - startedAt}ms`);
 
   // 数据回来了但页面随即被清空：不能当成功返回，否则错误会被推迟到下一条命令（issue #17）
   assertLptPageAlive(page, '请求完成');
@@ -227,7 +267,7 @@ export async function navigateToLpt(page: Page, path: string = '/recommend', wai
 
 /** 读取 imId */
 export async function readLptImId(page: Page): Promise<string> {
-  const result = await page.evaluate(() => {
+  const result = await withTimeout(page.evaluate(() => {
     // Try cookie first
     const m = document.cookie.match(/imId_2=([^;]+)/i);
     if (m) return m[1];
@@ -249,8 +289,8 @@ export async function readLptImId(page: Page): Promise<string> {
       }
     } catch (_) {}
     return '';
-  });
-  
+  }), 30_000, 'readLptImId');
+
   return result || '';
 }
 

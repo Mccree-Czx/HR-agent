@@ -181,6 +181,35 @@ class ResumeCollectServiceTest {
         resumeCollectService.collectOne(record, candidate);
 
         verify(commandService, never()).requestResume(any(), anyString(), any());
-        assertEquals("SENT", greetingMapper.selectById(record.getId()).getStatus(), "未确认门槛不得改状态");
+        assertEquals("SENT", greetingMapper.selectById(record.getId()).getStatus(), "未确认门 槛不得改状态");
+    }
+
+    // ---------- 直接索要(已读触发路径的守卫,2026-09-26 新增) ----------
+
+    @Test
+    void requestResumeDirectSkipsWhenRecordNotSent() throws Exception {
+        record.setStatus("REQUESTED");
+        greetingMapper.updateById(record);
+
+        assertFalse(resumeCollectService.requestResumeDirect(account, candidate), "已索要过的记录不得重复触发");
+        verify(commandService, never()).requestResume(any(), anyString(), any());
+    }
+
+    @Test
+    void requestResumeDirectSkipsWhenCandidateNotPass() throws Exception {
+        candidate.setPassStatus("PENDING");
+        candidateMapper.updateById(candidate);
+
+        assertFalse(resumeCollectService.requestResumeDirect(account, candidate), "非 PASS 不得索要");
+        verify(commandService, never()).requestResume(any(), anyString(), any());
+    }
+
+    @Test
+    void requestResumeDirectRequestsAndMarksRequested() throws Exception {
+        when(commandService.requestResume(any(), org.mockito.ArgumentMatchers.eq("r1"), any()))
+                .thenReturn(java.util.Optional.of(objectMapper.readTree("{\"success\":true,\"confirmed\":true}")));
+
+        assertTrue(resumeCollectService.requestResumeDirect(account, candidate));
+        assertEquals("REQUESTED", greetingMapper.selectById(record.getId()).getStatus());
     }
 }

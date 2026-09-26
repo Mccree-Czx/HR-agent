@@ -12,10 +12,13 @@
  */
 
 import { execFile, spawn } from 'node:child_process';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 import puppeteer, { Browser, Page } from 'puppeteer-core';
 import { config } from '../config.js';
-import { safeGoto } from '../common/lpt-utils.js';
+import { safeGoto, stepLog } from '../common/lpt-utils.js';
 
 export interface BrowserOptions {
   headless?: boolean;
@@ -40,6 +43,54 @@ export const REMOTE_DEBUGGING_PORT: number = (() => {
 
 const PROBE_TIMEOUT_MS = 800;
 const LAUNCH_READY_MS = 30_000;
+
+/**
+ * 自动化专用页签状态文件(按调试端口区分账号实例):记录 CDP targetId。
+ * 命令结束不关页签,下一条命令凭此找回同一页签——不占用用户正在使用的页签,也不被
+ * 用户页签上的弹窗/冻结拖挂。
+ *
+ * 不用 window.name 做标记:实测站点脚本会在页面加载时清掉它(2026-09-26);
+ * 文件 + targetId 与页面无关,零页面交互,更稳。
+ */
+function automationTabStateFile(): string {
+  const dir = join(homedir(), '.recruit-browser');
+  mkdirSync(dir, { recursive: true });
+  return join(dir, `liepin-cli.automation-tab.${REMOTE_DEBUGGING_PORT}.json`);
+}
+
+function readAutomationTargetId(): string | null {
+  try {
+    const raw = JSON.parse(readFileSync(automationTabStateFile(), 'utf8'));
+    return typeof raw?.targetId === 'string' && raw.targetId ? raw.targetId : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeAutomationTargetId(targetId: string): void {
+  try {
+    writeFileSync(automationTabStateFile(), JSON.stringify({ targetId, updatedAt: Date.now() }), 'utf8');
+  } catch {
+    /* 状态写失败只影响下次复用,忽略 */
+  }
+}
+
+/** 页签的 CDP targetId(puppeteer 未公开 getter,与主会话一样按内部结构读取,失败返回 null) */
+function pageTargetId(page: Page): string | null {
+  try {
+    const id = (page.target() as unknown as { _targetId?: string })._targetId;
+    return typeof id === 'string' && id ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * CDP 协议超时(puppeteer 默认 180_000ms = 3 分钟):目标页无响应时,单条协议命令会静默挂满
+ * 3 分钟——正好吃掉后端整条命令的超时预算且无任何日志(2026-09-26 chatlist 两次 3 分钟超时)。
+ * 收敛到 60s:快速失败并给出可诊断错误,仍远小于后端命令超时。
+ */
+const CDP_PROTOCOL_TIMEOUT_MS = 60_000;
 
 /**
  * 是否以无头（隐藏）方式启动。
@@ -248,7 +299,7 @@ export class CdpBrowser {
     };
   }
 
-  /** 连上浏览器：端口上已有实例就复用，没有才拉起一只。 */
+  /** 连上浏览器：端口上已有实例就复用，没有才拉起一只；随后选择自动化专用页签。 */
   async launch(): Promise<Page> {
     if (this.browser) {
       return this.page!;
@@ -256,11 +307,11 @@ export class CdpBrowser {
 
     const existingWsUrl = await probeRemoteDebuggingWsEndpoint();
     this.browser = existingWsUrl
-      ? await puppeteer.connect({ browserWSEndpoint: existingWsUrl })
+      ? await puppeteer.connect({ browserWSEndpoint: existingWsUrl, protocolTimeout: CDP_PROTOCOL_TIMEOUT_MS })
       : await this.spawnAndConnect();
 
     const pages = (await this.browser.pages()).filter((p) => !p.isClosed());
-    this.page = pages[0] ?? (await this.browser.newPage());
+    this.page = await this.resolveAutomationPage(pages);
 
     await this.page.setViewport({
       width: config.viewport.width,
@@ -270,6 +321,29 @@ export class CdpBrowser {
     // 不覆盖 User-Agent：伪造的 UA 与 sec-ch-ua Client Hints、真实平台矛盾，反而是风控指纹
 
     return this.page;
+  }
+
+  /**
+   * 选择自动化专用页签:按状态文件的 targetId 找回上次命令用的页签;
+   * 找不到(首次/被关/浏览器重启)则新建并记录;新建失败时退回第一个页签(旧行为)并警告。
+   */
+  private async resolveAutomationPage(pages: Page[]): Promise<Page> {
+    const savedTargetId = readAutomationTargetId();
+    const existing = savedTargetId ? pages.find((p) => pageTargetId(p) === savedTargetId) : undefined;
+    if (existing) {
+      stepLog('复用自动化专用页签');
+      return existing;
+    }
+    try {
+      const page = await this.browser!.newPage();
+      const targetId = pageTargetId(page);
+      if (targetId) writeAutomationTargetId(targetId);
+      stepLog('已新建自动化专用页签');
+      return page;
+    } catch (e: any) {
+      console.error(`[liepin] 创建自动化专用页签失败,退回使用现有页签(可能与用户操作互相干扰): ${e?.message || e}`);
+      return pages[0] ?? (await this.browser!.newPage());
+    }
   }
 
   /** 自己 spawn 一只常驻浏览器，再按固定端口连上去。 */
@@ -321,7 +395,7 @@ export class CdpBrowser {
     const deadline = Date.now() + LAUNCH_READY_MS;
     while (Date.now() < deadline) {
       const wsUrl = await probeRemoteDebuggingWsEndpoint();
-      if (wsUrl) return await puppeteer.connect({ browserWSEndpoint: wsUrl });
+      if (wsUrl) return await puppeteer.connect({ browserWSEndpoint: wsUrl, protocolTimeout: CDP_PROTOCOL_TIMEOUT_MS });
       await sleep(300);
     }
 

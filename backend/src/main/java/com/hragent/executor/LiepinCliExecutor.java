@@ -6,6 +6,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -88,27 +90,52 @@ public class LiepinCliExecutor {
         pb.environment().put("LIEPIN_USER_DATA_DIR", resolveUserDataDir(account));
         pb.environment().put("LIEPIN_BROWSER_REMOTE_DEBUGGING_PORT", String.valueOf(resolveDebugPort(account)));
 
-        log.info("执行 liepin-cli: {} (account={}, dataDir={})",
-                String.join(" ", args), account.getId(), resolveUserDataDir(account));
+        // 输出落盘而非管道读取:子进程输出超过管道缓冲区(约 64KB)时,若父进程不并发读流,
+        // 子进程会阻塞在写输出、永不退出,表现为整段命令超时被强杀(2026-09-26 根因:
+        // chatlist 30 个会话输出 68KB,连续多轮 3 分钟假超时,回复/已读全部漏处理)。
+        // 落盘后无需消费方配合,超时时也能读到部分输出用于诊断。
+        Path outputFile = Files.createTempFile("liepin-cli-", ".log");
+        try {
+            pb.redirectOutput(outputFile.toFile());
 
-        Process process = pb.start();
-        boolean finished = process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS);
-        if (!finished) {
-            process.destroyForcibly();
-            process.waitFor(5, TimeUnit.SECONDS);
-            String partial;
-            try {
-                partial = new String(process.getInputStream().readAllBytes());
-            } catch (IOException e) {
-                // destroy 后流可能已关闭,拿不到部分输出不影响超时判定
-                partial = "";
+            log.info("执行 liepin-cli: {} (account={}, dataDir={})",
+                    String.join(" ", args), account.getId(), resolveUserDataDir(account));
+
+            Process process = pb.start();
+            boolean finished = process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS);
+            if (!finished) {
+                process.destroyForcibly();
+                process.waitFor(5, TimeUnit.SECONDS);
+                String partial = readOutputQuietly(outputFile);
+                log.warn("liepin-cli 超时(account={}, args={}),部分输出: {}",
+                        account.getId(), String.join(" ", args), truncate(partial, 500));
+                return new CliResult(-1, partial, "", true);
             }
-            log.warn("liepin-cli 超时(account={}, args={})", account.getId(), String.join(" ", args));
-            return new CliResult(-1, partial, "", true);
+            return new CliResult(process.exitValue(), readOutputQuietly(outputFile), "", false);
+        } finally {
+            deleteQuietly(outputFile);
         }
+    }
 
-        String stdout = new String(process.getInputStream().readAllBytes());
-        return new CliResult(process.exitValue(), stdout, "", false);
+    /** 读取子进程输出文件(失败时返回空串,不影响主流程判定) */
+    private static String readOutputQuietly(Path outputFile) {
+        try {
+            return new String(Files.readAllBytes(outputFile));
+        } catch (IOException e) {
+            return "";
+        }
+    }
+
+    private static void deleteQuietly(Path path) {
+        try {
+            Files.deleteIfExists(path);
+        } catch (IOException e) {
+            // 临时文件清理失败不影响业务
+        }
+    }
+
+    private static String truncate(String s, int max) {
+        return s == null || s.length() <= max ? s : s.substring(0, max) + "...";
     }
 
     /**

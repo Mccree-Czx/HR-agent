@@ -47,6 +47,8 @@ hr-agent:
     resume-detail-batch-limit: ${AUTO_RECRUIT_RESUME_DETAIL_BATCH_LIMIT:20}
     # 相邻两次简历详情读取的最小间隔(毫秒,读操作轻节流)
     resume-detail-interval-millis: ${AUTO_RECRUIT_RESUME_DETAIL_INTERVAL_MILLIS:1000}
+    # 会话列表拉取失败后的轮内重试等待(毫秒)
+    poll-retry-delay-millis: ${AUTO_RECRUIT_POLL_RETRY_DELAY_MILLIS:20000}
   storage:
     type: ${STORAGE_TYPE:minio}
     minio:

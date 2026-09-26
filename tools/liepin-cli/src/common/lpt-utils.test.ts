@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { assertLptPageAlive, RiskControlError, safeGoto } from './lpt-utils.js';
+import { assertLptPageAlive, RiskControlError, safeGoto, withTimeout } from './lpt-utils.js';
 
 const fakePage = (url: string) => ({ url: () => url }) as any;
 
@@ -45,6 +45,31 @@ test('safeGoto: goto 抛错也要恢复 Runtime', async () => {
   const { page, calls } = recordingPage({ gotoError: new Error('boom') });
   await assert.rejects(() => safeGoto(page, 'https://lpt.liepin.com/'), /boom/);
   assert.deepEqual(calls, ['Runtime.disable', 'goto', 'Runtime.enable']);
+});
+
+test('safeGoto: 显式传递 30s 导航超时(不允许无界挂起)', async () => {
+  const options: any[] = [];
+  const page: any = {
+    mainFrame: () => ({ client: { send: async () => {} } }),
+    goto: async (_url: string, opts: any) => { options.push(opts); },
+  };
+  await safeGoto(page, 'https://lpt.liepin.com/');
+  assert.equal(options[0]?.timeout, 30000);
+});
+
+test('withTimeout: 按时完成时原样返回', async () => {
+  assert.equal(await withTimeout(Promise.resolve(42), 1000, '测试'), 42);
+});
+
+test('withTimeout: 超期未完成时抛出带标签的诊断错误', async () => {
+  await assert.rejects(
+    () => withTimeout(new Promise(() => {}), 50, 'lptFetch 页内请求'),
+    /lptFetch 页内请求 超时\(50ms\)/,
+  );
+});
+
+test('withTimeout: 原始拒绝原样透传', async () => {
+  await assert.rejects(() => withTimeout(Promise.reject(new Error('boom')), 1000, '测试'), /boom/);
 });
 
 test('safeGoto: 拿不到主会话（mock page）时退化为普通 goto', async () => {

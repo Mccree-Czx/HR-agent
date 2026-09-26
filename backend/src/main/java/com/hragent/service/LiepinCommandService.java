@@ -99,9 +99,13 @@ public class LiepinCommandService {
         return JsonExtractor.parse(result.stdout());
     }
 
-    /** 聊天列表 → 数组(同意状态检测依据) */
+    /**
+     * 聊天列表 → 数组(同意/已读状态检测依据)。
+     * 固定取 100 条(CLI 上限):新招呼会把旧会话挤出较小分页窗口,曾导致已回复候选人漏检
+     * (2026-09-26:25 条新招呼把 14 点答复的候选人挤出了默认 30 条窗口)。
+     */
     public List<JsonNode> chatlist(LiepinAccount account, Duration timeout) {
-        CliResult result = run(account, timeout, "chatlist", "--json");
+        CliResult result = run(account, timeout, "chatlist", "--limit", "100", "--json");
         JsonNode node = JsonExtractor.parse(result.stdout())
                 .orElseThrow(() -> BizException.badRequest("chatlist 输出无有效 JSON"));
         if (!node.isArray()) {

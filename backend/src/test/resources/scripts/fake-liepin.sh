@@ -1,9 +1,19 @@
 #!/bin/sh
 # liepin-cli 桩脚本(测试用)
 # - 首个参数 sleep-long:睡 60 秒(验证超时)
+# - 首个参数 big-output:输出 >64KB(验证输出超过管道缓冲区时不再假死)
 # - 其余情况行为由 FAKE_MODE 环境变量控制
 if [ "$1" = "sleep-long" ]; then
   sleep 60
+  exit 0
+fi
+if [ "$1" = "big-output" ]; then
+  # 每行约 80 字节 × 2000 行 ≈ 160KB,超过管道缓冲区(约 64KB)
+  i=0
+  while [ $i -lt 2000 ]; do
+    echo '[{"name":"候选人占位","resume_id":"r-big-0000000000000000000000000000000000000000"}]'
+    i=$((i+1))
+  done
   exit 0
 fi
 case "$FAKE_MODE" in

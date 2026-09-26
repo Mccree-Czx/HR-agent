@@ -111,7 +111,7 @@ class CapabilityContractTest {
     }
 
     private void replyAndResult(String result) throws Exception {
-        when(executor.execute(eq(account), any(), eq("chatlist"), eq("--json")))
+        when(executor.execute(eq(account), any(), eq("chatlist"), eq("--limit"), eq("100"), eq("--json")))
                 .thenReturn(new CliResult(0, "[{\"im_id\":\"im-mock-1\",\"direction\":\"1\"}]", "", false));
         when(executor.execute(eq(account), any(), eq("request-resume"), anyString(), eq("--json")))
                 .thenReturn(new CliResult(0, result, "", false));

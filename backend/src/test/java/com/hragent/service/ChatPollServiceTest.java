@@ -490,6 +490,102 @@ class ChatPollServiceTest {
                 "user_id 回退命中已知候选人,不得误建陌生候选人");
     }
 
+    // ---------- 对方已读我方消息:不等回复直接索要(2026-09-26) ----------
+
+    @Test
+    void oppositeReadTriggersResumeRequestWithoutReply() throws Exception {
+        Jd jd = confirmedJd("招聘主管", "88888");
+        Candidate candidate = knownCandidate("im1", "张三");
+        candidate.setJdId(jd.getId());
+        candidateMapper.updateById(candidate);
+        GreetingRecord record = greeting(candidate);
+
+        // 对方沉默(direction=0),但已读我方最新消息
+        stubChatlist("{\"im_id\":\"im1\",\"direction\":\"0\",\"raw_metadata\":{\"oppositeRead\":\"1\"}}");
+        when(commandService.requestResume(any(), eq("r-im1"), any()))
+                .thenReturn(Optional.of(objectMapper.readTree("{\"success\":true,\"confirmed\":true}")));
+
+        int processed = chatPollService.pollOnce(account);
+
+        assertEquals(1, processed, "已读触发索要应计为已处理");
+        verify(commandService).requestResume(any(), eq("r-im1"), any());
+        assertEquals("REQUESTED", greetingMapper.selectById(record.getId()).getStatus());
+        verify(commandService, never()).chatmsg(any(), anyString(), any());
+    }
+
+    @Test
+    void oppositeReadMissingOrZeroDoesNotRequest() throws Exception {
+        Jd jd = confirmedJd("招聘主管", "88888");
+        Candidate candidate = knownCandidate("im1", "张三");
+        candidate.setJdId(jd.getId());
+        candidateMapper.updateById(candidate);
+        GreetingRecord record = greeting(candidate);
+
+        // 字段缺失
+        stubChatlist("{\"im_id\":\"im1\",\"direction\":\"0\"}");
+        chatPollService.pollOnce(account);
+        // 字段为 0(未读)
+        stubChatlist("{\"im_id\":\"im1\",\"direction\":\"0\",\"raw_metadata\":{\"oppositeRead\":\"0\"}}");
+        chatPollService.pollOnce(account);
+
+        verify(commandService, never()).requestResume(any(), anyString(), any());
+        assertEquals("SENT", greetingMapper.selectById(record.getId()).getStatus());
+    }
+
+    @Test
+    void oppositeReadWithUnconfirmedThresholdDoesNotRequest() throws Exception {
+        Jd jd = unconfirmedJd("未确认门槛岗位", "77777");
+        Candidate candidate = knownCandidate("im1", "张三");
+        candidate.setJdId(jd.getId());
+        candidateMapper.updateById(candidate);
+        GreetingRecord record = greeting(candidate);
+
+        stubChatlist("{\"im_id\":\"im1\",\"direction\":\"0\",\"raw_metadata\":{\"oppositeRead\":\"1\"}}");
+        chatPollService.pollOnce(account);
+
+        verify(commandService, never()).requestResume(any(), anyString(), any());
+        assertEquals("SENT", greetingMapper.selectById(record.getId()).getStatus(), "未确认门槛不得改状态");
+    }
+
+    @Test
+    void oppositeReadAlreadyRequestedDoesNotRepeat() throws Exception {
+        Jd jd = confirmedJd("招聘主管", "88888");
+        Candidate candidate = knownCandidate("im1", "张三");
+        candidate.setJdId(jd.getId());
+        candidateMapper.updateById(candidate);
+        GreetingRecord record = greeting(candidate);
+        record.setStatus("REQUESTED");
+        greetingMapper.updateById(record);
+
+        stubChatlist("{\"im_id\":\"im1\",\"direction\":\"0\",\"raw_metadata\":{\"oppositeRead\":\"1\"}}");
+        chatPollService.pollOnce(account);
+
+        verify(commandService, never()).requestResume(any(), anyString(), any());
+    }
+
+    // ---------- 轮内重试:chatlist 首次失败(非风控)后重试成功 ----------
+
+    @Test
+    void chatlistTransientFailureRetriesOnceWithinRound() throws Exception {
+        Jd jd = confirmedJd("招聘主管", "88888");
+        Candidate candidate = knownCandidate("im1", "张三");
+        candidate.setJdId(jd.getId());
+        candidateMapper.updateById(candidate);
+        greeting(candidate);
+
+        when(commandService.chatlist(any(), any()))
+                .thenThrow(new CliException(CliException.Type.TIMEOUT, "liepin-cli 执行超时(account=1)"))
+                .thenReturn(List.of(objectMapper.readTree(
+                        "{\"im_id\":\"im1\",\"direction\":\"0\",\"raw_metadata\":{\"oppositeRead\":\"1\"}}")));
+        when(commandService.requestResume(any(), eq("r-im1"), any()))
+                .thenReturn(Optional.of(objectMapper.readTree("{\"success\":true,\"confirmed\":true}")));
+
+        chatPollService.pollOnce(account);
+
+        verify(commandService, times(2)).chatlist(any(), any());
+        verify(commandService).requestResume(any(), eq("r-im1"), any());
+    }
+
     // ---------- 辅助 ----------
 
     private void stubChatlist(String... sessions) throws Exception {

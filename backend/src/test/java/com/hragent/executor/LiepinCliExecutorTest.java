@@ -57,6 +57,16 @@ class LiepinCliExecutorTest {
     }
 
     @Test
+    void executeLargeOutputDoesNotDeadlock() throws Exception {
+        // 回归(2026-09-26):输出超过管道缓冲区(约 64KB)时,旧实现因父进程不读流导致子进程写阻塞、
+        // 整段命令假超时(chatlist 30 个会话输出 68KB,连续多轮 3 分钟超时,回复/已读全部漏处理)
+        CliResult result = newExecutor().execute(account(1), Duration.ofSeconds(10), "big-output");
+        assertTrue(!result.timedOut(), "大输出不得因管道写满而假超时");
+        assertEquals(0, result.exitCode());
+        assertTrue(result.stdout().length() > 65536, "大输出应完整读回,实际 " + result.stdout().length());
+    }
+
+    @Test
     void checkRiskDetectsCaptcha() {
         LiepinCliExecutor executor = newExecutor();
         CliResult riskResult = new CliResult(0, "302 to safe.liepin.com/captchaPage_PC 行为异常", "", false);
