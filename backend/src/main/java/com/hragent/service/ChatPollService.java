@@ -54,6 +54,10 @@ import java.util.Optional;
  * <p>容错:单会话失败不中断其余会话;风控({@link CliException.Type#RISK_CONTROL})与登录失效
  * ({@link CliException.Type#NOT_LOGGED_IN})立即中断本轮并上抛,交由既有熔断链路处理。
  * 外发动作(附件下载、索要简历)与打招呼统一由 {@link AccountPaceGuard} 按账号维度节流(评审 I-2)。
+ *
+ * <p>外发门禁(2026-09-26 运行时开关):开关关闭(只停主动外发)时,索要路径
+ * (回复触发/已读触发/陌生评分后)全部跳过并「攒着」——候选状态不改,检测/附件下载不受影响;
+ * 开关恢复后下一轮自动补做。手动路径(ADMIN 手动触发的 /api/recruit/*)不经过本服务,不受开关限制。
  */
 @Slf4j
 @Service
@@ -82,12 +86,14 @@ public class ChatPollService {
     private final LiepinAccountMapper accountMapper;
     private final HrAgentProperties properties;
     private final AccountPaceGuard paceGuard;
+    private final AutoRecruitSettingService settingService;
 
     public ChatPollService(LiepinCommandService commandService, ResumeCollectService resumeCollectService,
                            ScoringEngine scoringEngine, CandidateMapper candidateMapper,
                            GreetingRecordMapper greetingMapper, ResumeFileMapper resumeFileMapper,
                            JdMapper jdMapper, LiepinAccountMapper accountMapper,
-                           HrAgentProperties properties, AccountPaceGuard paceGuard) {
+                           HrAgentProperties properties, AccountPaceGuard paceGuard,
+                           AutoRecruitSettingService settingService) {
         this.commandService = commandService;
         this.resumeCollectService = resumeCollectService;
         this.scoringEngine = scoringEngine;
@@ -98,6 +104,7 @@ public class ChatPollService {
         this.accountMapper = accountMapper;
         this.properties = properties;
         this.paceGuard = paceGuard;
+        this.settingService = settingService;
     }
 
     /**
@@ -237,6 +244,10 @@ public class ChatPollService {
 
     /** 已读即索要:记录/评分/门槛前置检查 → 账号节流 → 直接索要(不检测回复,复用既有守卫) */
     private boolean requestResumeOnRead(LiepinAccount account, Candidate candidate) {
+        if (!settingService.isEnabled()) {
+            log.info("自动外发已关闭,跳过已读索要(攒着,开关恢复后补做),候选人 {}", candidate.getId());
+            return false;
+        }
         GreetingRecord record = greetingMapper.selectOne(new LambdaQueryWrapper<GreetingRecord>()
                 .eq(GreetingRecord::getCandidateId, candidate.getId())
                 .last("LIMIT 1"));
@@ -318,6 +329,10 @@ public class ChatPollService {
 
     /** 已知候选人仅文本回复:门槛已确认 + 评分 PASS + 未 REQUESTED → 复用既有索要路径 */
     private boolean requestResumeForKnown(LiepinAccount account, Candidate candidate, Duration timeout) {
+        if (!settingService.isEnabled()) {
+            log.info("自动外发已关闭,跳过回复索要(攒着,开关恢复后补做),候选人 {}", candidate.getId());
+            return false;
+        }
         if (!"PASS".equals(candidate.getPassStatus())) {
             log.debug("候选人 {} 非 PASS({}),不索要", candidate.getId(), candidate.getPassStatus());
             return false;
@@ -423,8 +438,12 @@ public class ChatPollService {
         return candidate;
     }
 
-    /** 陌生来话评分后:仅 PASS 且门槛已确认才索要(否则保持待处理) */
+    /** 陌生来话评分后:仅 PASS 且门槛已确认才索要(否则保持待处理);运行时开关关闭时跳过攒着 */
     private void maybeRequestAfterStrangerScore(LiepinAccount account, Long candidateId, Duration timeout) {
+        if (!settingService.isEnabled()) {
+            log.info("自动外发已关闭,跳过陌生来话索要(攒着,开关恢复后补做),候选人 {}", candidateId);
+            return;
+        }
         Candidate fresh = candidateMapper.selectById(candidateId);
         if (fresh == null || !"PASS".equals(fresh.getPassStatus())) {
             return;

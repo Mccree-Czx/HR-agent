@@ -86,6 +86,9 @@ class ChatPollServiceTest {
     @Autowired
     private StorageService storageService;
 
+    @Autowired
+    private AutoRecruitSettingService settingService;
+
     @MockitoBean
     private LiepinCommandService commandService;
 
@@ -561,6 +564,67 @@ class ChatPollServiceTest {
         chatPollService.pollOnce(account);
 
         verify(commandService, never()).requestResume(any(), anyString(), any());
+    }
+
+    // ---------- 运行时开关关闭(只停主动外发):索要攒着,附件照常收集 ----------
+
+    @Test
+    void switchOffSkipsReadRequestAndKeepsRecord() throws Exception {
+        Jd jd = confirmedJd("招聘主管", "88888");
+        Candidate candidate = knownCandidate("im1", "张三");
+        candidate.setJdId(jd.getId());
+        candidateMapper.updateById(candidate);
+        GreetingRecord record = greeting(candidate);
+        settingService.setEnabled(false);
+
+        stubChatlist("{\"im_id\":\"im1\",\"direction\":\"0\",\"raw_metadata\":{\"oppositeRead\":\"1\"}}");
+
+        int processed = chatPollService.pollOnce(account);
+
+        verify(commandService, never()).requestResume(any(), anyString(), any());
+        assertEquals("SENT", greetingMapper.selectById(record.getId()).getStatus(), "攒着:状态不得回写");
+        assertEquals(0, processed);
+    }
+
+    @Test
+    void switchOffSkipsReplyRequestAndKeepsRecord() throws Exception {
+        Jd jd = confirmedJd("招聘主管", "88888");
+        Candidate candidate = knownCandidate("im1", "张三");
+        candidate.setJdId(jd.getId());
+        candidateMapper.updateById(candidate);
+        GreetingRecord record = greeting(candidate);
+        settingService.setEnabled(false);
+
+        stubChatlist("{\"im_id\":\"im1\",\"user_id\":\"u1\",\"direction\":\"1\"}");
+        stubChatmsg("im1", "{\"payload\":{\"bodies\":[{\"type\":\"txt\",\"msg\":\"您好\"}]}}");
+
+        int processed = chatPollService.pollOnce(account);
+
+        verify(commandService, never()).requestResume(any(), anyString(), any());
+        assertEquals("SENT", greetingMapper.selectById(record.getId()).getStatus(), "攒着:状态不得回写");
+        assertEquals(0, processed);
+    }
+
+    @Test
+    void switchOffStillCollectsAttachment() throws Exception {
+        Candidate candidate = knownCandidate("im1", "张三");
+        greeting(candidate);
+        settingService.setEnabled(false);
+
+        stubChatlist("{\"im_id\":\"im1\",\"name\":\"张三\",\"direction\":\"1\"}");
+        stubChatmsg("im1",
+                "{\"message_id\":\"m1\",\"sender\":\"对方\",\"opposite_im_id\":\"im1\","
+                        + "\"payload\":{\"bodies\":[{\"type\":\"file\",\"fileId\":\"f1\",\"filename\":\"简历.pdf\"}]}}");
+        Path pdf = writePdf("resume-off.pdf");
+        when(commandService.attachDownload(any(), eq("im1"), anyString(), any()))
+                .thenReturn(Optional.of(downloadResult(pdf)));
+
+        int processed = chatPollService.pollOnce(account);
+
+        assertEquals(1, processed, "附件收集不受开关影响");
+        verify(commandService).attachDownload(any(), eq("im1"), anyString(), any());
+        assertEquals(1, resumeFileMapper.selectCount(new LambdaQueryWrapper<ResumeFile>()
+                .eq(ResumeFile::getCandidateId, candidate.getId())), "附件应照常入库");
     }
 
     // ---------- 轮内重试:chatlist 首次失败(非风控)后重试成功 ----------
