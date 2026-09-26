@@ -2,12 +2,15 @@ package com.hragent.controller;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.hragent.common.ApiResponse;
+import com.hragent.common.BizException;
 import com.hragent.entity.Jd;
+import com.hragent.security.LoginUser;
 import com.hragent.security.UserContext;
 import com.hragent.service.JdPublishService;
 import com.hragent.service.JdService;
 import com.hragent.service.JdThresholdService;
 import com.hragent.service.LiepinJobSyncService;
+import com.hragent.service.UserJdService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -27,13 +30,16 @@ public class JdController {
     private final JdPublishService jdPublishService;
     private final LiepinJobSyncService jobSyncService;
     private final JdThresholdService thresholdService;
+    private final UserJdService userJdService;
 
     public JdController(JdService jdService, JdPublishService jdPublishService,
-                        LiepinJobSyncService jobSyncService, JdThresholdService thresholdService) {
+                        LiepinJobSyncService jobSyncService, JdThresholdService thresholdService,
+                        UserJdService userJdService) {
         this.jdService = jdService;
         this.jdPublishService = jdPublishService;
         this.jobSyncService = jobSyncService;
         this.thresholdService = thresholdService;
+        this.userJdService = userJdService;
     }
 
     @GetMapping
@@ -81,6 +87,7 @@ public class JdController {
     /** AI 生成建议门槛与理由(仅建议,不构成确认) */
     @PostMapping("/{id}/threshold/suggest")
     public ApiResponse<String> suggestThreshold(@PathVariable Long id) {
+        requireJdPermission(id);
         return ApiResponse.ok(thresholdService.suggest(id));
     }
 
@@ -88,8 +95,21 @@ public class JdController {
     @PutMapping("/{id}/threshold/confirm")
     public ApiResponse<Jd> confirmThreshold(@PathVariable Long id,
                                             @RequestBody ThresholdConfirmRequest request) {
+        requireJdPermission(id);
         Long userId = UserContext.get() == null ? null : UserContext.get().getUserId();
         return ApiResponse.ok(thresholdService.confirm(id, request.threshold(), userId));
+    }
+
+    /**
+     * 门槛接口岗位授权校验(跨任务安全观察):仅 ADMIN 或该岗位已分配给当前用户可操作,
+     * 否则任一登录 HR 可为他人岗位打开自动外发。无权限抛 403。
+     */
+    private void requireJdPermission(Long jdId) {
+        LoginUser user = UserContext.get();
+        java.util.Set<Long> allowed = userJdService.allowedJdIds(user.getUserId(), user.getRole());
+        if (allowed != null && !allowed.contains(jdId)) {
+            throw BizException.forbidden("无权操作该岗位门槛");
+        }
     }
 
     /** 门槛确认请求体 */

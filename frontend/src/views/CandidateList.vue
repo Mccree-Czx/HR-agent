@@ -2,7 +2,7 @@
   <div>
     <el-tabs v-model="activeTab" @tab-change="onTabChange">
       <el-tab-pane label="已收简历" name="received" />
-      <el-tab-pane label="待分配" name="unassigned" />
+      <el-tab-pane v-if="isAdmin" label="待分配" name="unassigned" />
     </el-tabs>
     <div class="toolbar">
       <el-select v-if="activeTab === 'received'" v-model="selectedJdId" placeholder="选择岗位" clearable style="width: 220px" @change="load()">
@@ -77,9 +77,12 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { jdApi, candidateApi, recruitApi, searchTaskApi } from '../api/modules'
+
+// 待分配视图仅 ADMIN 可见:后端 unassigned=true 亦仅对 ADMIN 生效(评审 I-1)
+const isAdmin = computed(() => localStorage.getItem('role') === 'ADMIN')
 
 const rows = ref([])
 const jds = ref([])

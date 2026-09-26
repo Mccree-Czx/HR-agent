@@ -211,4 +211,82 @@ class JdControllerTest {
         assertEquals(75, after.getScoreThreshold(), "已确认门槛不得被通用接口覆盖");
         assertNotNull(after.getThresholdConfirmedAt(), "已确认状态不得被通用接口清除");
     }
+
+    private long createJdAsAdmin(String adminToken, String title) throws Exception {
+        String body = mockMvc.perform(post("/api/jd")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("title", title))))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        return objectMapper.readTree(body).path("data").path("id").asLong();
+    }
+
+    private long createHrAsAdmin(String adminToken, String username) throws Exception {
+        String body = mockMvc.perform(post("/api/user")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "username", username,
+                                "password", "hr123456",
+                                "role", "HR"))))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        return objectMapper.readTree(body).path("data").path("id").asLong();
+    }
+
+    /**
+     * 跨任务安全观察:非 ADMIN 且未被分配该岗位时,confirm 应 403,
+     * 不得为他人岗位打开自动外发门禁。
+     */
+    @Test
+    void nonAdminWithoutPermissionCannotConfirmThreshold() throws Exception {
+        String adminToken = token();
+        long jdId = createJdAsAdmin(adminToken, "他人岗位-确认");
+        createHrAsAdmin(adminToken, "hr-no-perm-confirm");
+        String hrToken = TestAuthHelper.login(mockMvc, objectMapper, "hr-no-perm-confirm", "hr123456");
+
+        mockMvc.perform(put("/api/jd/" + jdId + "/threshold/confirm")
+                        .header("Authorization", "Bearer " + hrToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("threshold", 80))))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value(403));
+
+        assertNull(jdMapper.selectById(jdId).getThresholdConfirmedAt(), "未授权不得写入门槛确认");
+    }
+
+    /** 跨任务安全观察:非 ADMIN 且未被分配该岗位时,suggest 应 403,不得泄露/为他人生成建议 */
+    @Test
+    void nonAdminWithoutPermissionCannotSuggestThreshold() throws Exception {
+        String adminToken = token();
+        long jdId = createJdAsAdmin(adminToken, "他人岗位-建议");
+        createHrAsAdmin(adminToken, "hr-no-perm-suggest");
+        String hrToken = TestAuthHelper.login(mockMvc, objectMapper, "hr-no-perm-suggest", "hr123456");
+
+        mockMvc.perform(post("/api/jd/" + jdId + "/threshold/suggest")
+                        .header("Authorization", "Bearer " + hrToken))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value(403));
+    }
+
+    /** 非 ADMIN 但已分配该岗位:confirm 应放行(不得误伤合法使用) */
+    @Test
+    void nonAdminWithAssignedJdCanConfirmThreshold() throws Exception {
+        String adminToken = token();
+        long jdId = createJdAsAdmin(adminToken, "已分配岗位");
+        long hrId = createHrAsAdmin(adminToken, "hr-assigned");
+
+        mockMvc.perform(post("/api/user/" + hrId + "/jd/" + jdId)
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk());
+
+        String hrToken = TestAuthHelper.login(mockMvc, objectMapper, "hr-assigned", "hr123456");
+        mockMvc.perform(put("/api/jd/" + jdId + "/threshold/confirm")
+                        .header("Authorization", "Bearer " + hrToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("threshold", 66))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.scoreThreshold").value(66));
+    }
 }

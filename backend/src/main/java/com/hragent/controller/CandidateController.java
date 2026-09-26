@@ -63,9 +63,16 @@ public class CandidateController {
                                                     @RequestParam(required = false) Boolean unassigned) {
         LoginUser user = UserContext.get();
         Set<Long> allowed = userJdService.allowedJdIds(user.getUserId(), user.getRole());
+        boolean admin = allowed == null;
 
         boolean onlyWithResume = Boolean.TRUE.equals(hasResumeFile);
         boolean onlyUnassigned = Boolean.TRUE.equals(unassigned);
+
+        // 待分配视图仅 ADMIN 可见(评审 I-1):该视图候选人无有效岗位,无法按岗位授权过滤,
+        // 若放开非 ADMIN 将越权读取全系统无岗位/岗位已删候选人池;非 ADMIN 请求此参数返回空分页。
+        if (onlyUnassigned && !admin) {
+            return ApiResponse.ok(emptyLedgerPage(pageNo, pageSize));
+        }
 
         LambdaQueryWrapper<Candidate> qw = new LambdaQueryWrapper<Candidate>()
                 .eq(jdId != null, Candidate::getJdId, jdId)
@@ -95,8 +102,8 @@ public class CandidateController {
                             .notIn(!existingJdIds.isEmpty(), Candidate::getJdId, existingJdIds)));
         }
 
-        // 岗位权限过滤;待分配视图中的候选人无有效岗位,无法按岗位授权,故跳过
-        if (allowed != null && !onlyUnassigned) {
+        // 岗位权限过滤(ADMIN 的 allowed 为 null 表示不限);待分配视图已在上面限定仅 ADMIN 可达。
+        if (allowed != null) {
             if (allowed.isEmpty()) {
                 return ApiResponse.ok(emptyLedgerPage(pageNo, pageSize));
             }

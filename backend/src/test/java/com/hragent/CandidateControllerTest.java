@@ -13,11 +13,15 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Map;
+
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -205,5 +209,48 @@ class CandidateControllerTest {
                         .param("unassigned", "true"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.total").value(2));
+    }
+
+    /**
+     * 评审 I-1:unassigned=true 仅 ADMIN 生效。非 ADMIN 请求该参数时返回空分页(与既有空分页处理一致,不报 500),
+     * 避免越权读取全系统无岗位/岗位已删候选人池。
+     */
+    @Test
+    void unassignedForbiddenForNonAdminReturnsEmptyPage() throws Exception {
+        seedCandidate("孤立甲", null);
+        seedCandidate("孤立乙", 777777L);
+
+        String adminToken = token();
+        mockMvc.perform(post("/api/user")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "username", "hr-unassigned",
+                                "password", "hr123456",
+                                "role", "HR"))))
+                .andExpect(status().isOk());
+        String hrToken = TestAuthHelper.login(mockMvc, objectMapper, "hr-unassigned", "hr123456");
+
+        mockMvc.perform(get("/api/candidate").header("Authorization", "Bearer " + hrToken)
+                        .param("unassigned", "true"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0))
+                .andExpect(jsonPath("$.data.total").value(0))
+                .andExpect(jsonPath("$.data.records").isEmpty());
+    }
+
+    /** ADMIN 请求 unassigned=true 仍正常返回孤立候选人(I-1 收口不得误伤 ADMIN) */
+    @Test
+    void unassignedForAdminStillReturnsOrphans() throws Exception {
+        Jd jd = seedJd("正常岗位");
+        seedCandidate("已分配", jd.getId());
+        seedCandidate("无岗位", null);
+
+        mockMvc.perform(get("/api/candidate").header("Authorization", "Bearer " + token())
+                        .param("unassigned", "true"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0))
+                .andExpect(jsonPath("$.data.total").value(1))
+                .andExpect(jsonPath("$.data.records[0].candidate.name").value("无岗位"));
     }
 }
