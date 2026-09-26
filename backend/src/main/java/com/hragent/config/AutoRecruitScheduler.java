@@ -31,6 +31,7 @@ import java.util.List;
  *     <li>防重叠:岗位已有 QUEUED/RUNNING 任务则本轮跳过,任务经既有 search_task 队列串行执行</li>
  *     <li>异常:单岗位失败不阻断其他岗位;风控类 {@link CliException} 立即停止本轮并上抛(既有熔断链路处理)</li>
  *     <li>开关:{@code hr-agent.auto-recruit.enabled} 默认关闭,需启动参数显式开启</li>
+ *     <li>手动触发:{@link #runRoundInternal()} 绕过开关/时段门禁,供 ADMIN 端点补跑/联调(设计内新增)</li>
  * </ul>
  */
 @Slf4j
@@ -94,7 +95,15 @@ public class AutoRecruitScheduler {
             log.debug("非工作时段({}),本轮跳过", now);
             return;
         }
-        // 3. 取第一个 NORMAL 账号(多账号轮询分配待确认,设计 §7)
+        runRoundInternal();
+    }
+
+    /**
+     * 单轮编排主体(不含开关/时段门禁),供工作时段定时调用与 ADMIN 手动触发(补跑/联调)复用。
+     * 顺序:取 NORMAL 账号 → 来信轮询 → 逐岗位(补评分 → 打招呼 → 防重叠后建推荐任务)。
+     */
+    public void runRoundInternal() {
+        // 取第一个 NORMAL 账号(多账号轮询分配待确认,设计 §7)
         LiepinAccount account = accountMapper.selectOne(new LambdaQueryWrapper<LiepinAccount>()
                 .eq(LiepinAccount::getLoginStatus, "NORMAL")
                 .orderByAsc(LiepinAccount::getId)
