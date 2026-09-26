@@ -244,7 +244,7 @@ public class AutoRecruitScheduler {
     /**
      * 下一个定时运行时刻:严格晚于 now 的最近整点(09:00..18:00 范围内);当日已无则次日 09:00;null → null。
      */
-    static LocalDateTime nextRunAt(LocalDateTime now) {
+    public static LocalDateTime nextRunAt(LocalDateTime now) {
         if (now == null) {
             return null;
         }
