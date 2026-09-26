@@ -1,7 +1,11 @@
 <template>
   <div>
+    <el-tabs v-model="activeTab" @tab-change="onTabChange">
+      <el-tab-pane label="已收简历" name="received" />
+      <el-tab-pane label="待分配" name="unassigned" />
+    </el-tabs>
     <div class="toolbar">
-      <el-select v-model="selectedJdId" placeholder="选择岗位" clearable style="width: 220px" @change="load()">
+      <el-select v-if="activeTab === 'received'" v-model="selectedJdId" placeholder="选择岗位" clearable style="width: 220px" @change="load()">
         <el-option v-for="jd in jds" :key="jd.id" :label="jd.title" :value="jd.id" />
       </el-select>
       <el-select v-model="filterStatus" placeholder="评分状态" clearable style="width: 140px" @change="load()">
@@ -9,10 +13,13 @@
         <el-option label="已通过" value="PASS" />
         <el-option label="未通过" value="FAIL" />
       </el-select>
-      <el-button type="primary" :disabled="!selectedJdId" @click="runScore">批量评分(10人)</el-button>
-      <el-button type="success" :disabled="!selectedJdId" @click="runGreet">批量打招呼(10人)</el-button>
-      <el-button :disabled="!selectedJdId" @click="runCollect">检测回复并索要简历</el-button>
-      <el-button type="warning" :disabled="!selectedJdId" :loading="recommendLoading" @click="runRecommend">拉取平台推荐</el-button>
+      <template v-if="activeTab === 'received'">
+        <el-button type="primary" :disabled="!selectedJdId" @click="runScore">批量评分(10人)</el-button>
+        <el-button type="success" :disabled="!selectedJdId" @click="runGreet">批量打招呼(10人)</el-button>
+        <el-button :disabled="!selectedJdId" @click="runCollect">检测回复并索要简历</el-button>
+        <el-button type="warning" :disabled="!selectedJdId" :loading="recommendLoading" @click="runRecommend">拉取平台推荐</el-button>
+      </template>
+      <span v-else class="tab-hint">待分配:无有效岗位的候选人(含已入库附件),需人工指派岗位</span>
     </div>
 
     <el-table :data="rows" v-loading="loading" border>
@@ -52,7 +59,7 @@
           <el-tag v-else type="info" size="small">未入库</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="140" fixed="right">
+      <el-table-column v-if="activeTab === 'received'" label="操作" width="140" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" @click="redo(row.candidate.id)">重新打分</el-button>
         </template>
@@ -78,6 +85,7 @@ const rows = ref([])
 const jds = ref([])
 const selectedJdId = ref(null)
 const filterStatus = ref('')
+const activeTab = ref('received')
 const total = ref(0)
 const pageNo = ref(1)
 const pageSize = 10
@@ -91,16 +99,28 @@ async function loadJds() {
   }
 }
 
+function onTabChange() {
+  load(1)
+}
+
 async function load(page = 1) {
   pageNo.value = page
   loading.value = true
   try {
-    const res = await candidateApi.page({
+    const params = {
       pageNo: pageNo.value,
       pageSize,
-      jdId: selectedJdId.value || undefined,
       passStatus: filterStatus.value || undefined
-    })
+    }
+    if (activeTab.value === 'received') {
+      // 已收简历:仅入库成功者;可按岗位/评分状态筛选
+      params.hasResumeFile = true
+      params.jdId = selectedJdId.value || undefined
+    } else {
+      // 待分配:无有效岗位者(含已入库附件)
+      params.unassigned = true
+    }
+    const res = await candidateApi.page(params)
     rows.value = res.data.records
     total.value = Number(res.data.total)
   } finally {
@@ -181,5 +201,10 @@ onMounted(async () => {
   margin-left: 6px;
   color: #999;
   font-size: 12px;
+}
+.tab-hint {
+  color: #999;
+  font-size: 12px;
+  align-self: center;
 }
 </style>

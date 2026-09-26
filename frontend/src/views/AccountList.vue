@@ -15,7 +15,14 @@
       <el-table-column prop="greetMode" label="打招呼模式" width="110">
         <template #default="{ row }">{{ row.greetMode === 'MANUAL' ? '人工确认' : '全自动' }}</template>
       </el-table-column>
-      <el-table-column prop="dailyGreetQuota" label="每日配额" width="90" />
+      <el-table-column prop="dailyGreetQuota" label="每日配额" width="130">
+        <template #header>
+          <span>每日配额</span>
+          <el-tooltip content="平台权益参考,系统不再限制">
+            <span class="header-hint">?</span>
+          </el-tooltip>
+        </template>
+      </el-table-column>
       <el-table-column label="熔断" width="80">
         <template #default="{ row }">
           <el-tag v-if="row.circuitBreaker" type="danger">已熔断</el-tag>
@@ -55,7 +62,7 @@
         </el-form-item>
         <el-form-item label="每日打招呼配额">
           <el-input-number v-model="form.dailyGreetQuota" :min="1" :max="100" />
-          <span class="field-hint">猎聘开聊权益约 100 点/天(以「我的权益」为准);单账号建议 ≤80 留余量</span>
+          <span class="field-hint">平台权益参考,系统不再限制</span>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -181,5 +188,18 @@ onMounted(() => load())
   margin-left: 8px;
   color: #999;
   font-size: 12px;
+}
+.header-hint {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  line-height: 14px;
+  margin-left: 4px;
+  text-align: center;
+  border-radius: 50%;
+  background: #c0c4cc;
+  color: #fff;
+  font-size: 11px;
+  cursor: help;
 }
 </style>

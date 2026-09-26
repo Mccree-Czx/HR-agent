@@ -12,7 +12,9 @@ export const jdApi = {
   update: (id, data) => http.put(`/jd/${id}`, data),
   remove: (id) => http.delete(`/jd/${id}`),
   publish: (id) => http.post(`/jd/${id}/publish`),
-  syncLiepin: () => http.post('/jd/sync-liepin')
+  syncLiepin: () => http.post('/jd/sync-liepin'),
+  suggestThreshold: (id) => http.post(`/jd/${id}/threshold/suggest`),
+  confirmThreshold: (id, threshold) => http.put(`/jd/${id}/threshold/confirm`, { threshold })
 }
 
 export const accountApi = {
