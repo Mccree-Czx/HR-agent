@@ -132,3 +132,9 @@ CREATE TABLE IF NOT EXISTS op_log (
     created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     KEY idx_created (created_at)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT ='审计日志';
+
+CREATE TABLE IF NOT EXISTS app_setting (
+    setting_key   VARCHAR(100) PRIMARY KEY,
+    setting_value TEXT,
+    updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT ='运行时设置(KV)';

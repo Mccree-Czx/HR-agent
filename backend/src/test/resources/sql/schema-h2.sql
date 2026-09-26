@@ -125,3 +125,9 @@ CREATE TABLE IF NOT EXISTS op_log (
     detail      TEXT,
     created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS app_setting (
+    setting_key   VARCHAR(100) PRIMARY KEY,
+    setting_value TEXT,
+    updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
