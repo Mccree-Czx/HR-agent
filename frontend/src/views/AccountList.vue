@@ -186,7 +186,7 @@ onMounted(() => load())
 }
 .field-hint {
   margin-left: 8px;
-  color: #999;
+  color: var(--hr-text-3);
   font-size: 12px;
 }
 .header-hint {
@@ -197,7 +197,7 @@ onMounted(() => load())
   margin-left: 4px;
   text-align: center;
   border-radius: 50%;
-  background: #c0c4cc;
+  background: var(--hr-text-3);
   color: #fff;
   font-size: 11px;
   cursor: help;

@@ -202,11 +202,11 @@ onMounted(async () => {
 }
 .score-reason {
   margin-left: 6px;
-  color: #999;
+  color: var(--hr-text-3);
   font-size: 12px;
 }
 .tab-hint {
-  color: #999;
+  color: var(--hr-text-3);
   font-size: 12px;
   align-self: center;
 }

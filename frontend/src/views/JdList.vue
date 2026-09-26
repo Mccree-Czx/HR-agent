@@ -139,7 +139,7 @@
           <el-form-item label="AI 建议">
             <div style="width: 100%">
               <span v-if="thresholdRow.thresholdSuggestion">{{ thresholdRow.thresholdSuggestion }}</span>
-              <span v-else style="color: #999">暂无建议,可点击「生成建议」</span>
+              <span v-else style="color: var(--hr-text-3)">暂无建议,可点击「生成建议」</span>
               <el-button link type="primary" :loading="suggesting" style="margin-left: 8px" @click="handleSuggest">生成建议</el-button>
             </div>
           </el-form-item>
@@ -180,7 +180,7 @@
             <el-tooltip v-if="hasJobMismatch(row)" :content="row.latestScore.reason">
               <el-tag type="warning" size="small">职能待确认</el-tag>
             </el-tooltip>
-            <span v-else style="color: #bbb">-</span>
+            <span v-else style="color: var(--hr-text-3)">-</span>
           </template>
         </el-table-column>
         <el-table-column label="打招呼状态" width="130">
@@ -434,7 +434,7 @@ onMounted(() => load())
 }
 .field-hint {
   margin-left: 8px;
-  color: #999;
+  color: var(--hr-text-3);
   font-size: 12px;
 }
 </style>

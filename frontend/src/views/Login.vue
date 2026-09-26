@@ -49,7 +49,7 @@ async function handleLogin() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #f0f2f5;
+  background: var(--hr-bg);
 }
 .login-card {
   width: 380px;
