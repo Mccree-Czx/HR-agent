@@ -17,7 +17,6 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-import java.time.DayOfWeek;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneId;
@@ -26,7 +25,7 @@ import java.util.List;
 /**
  * 自动招聘闭环定时编排(设计 §2/§4.2):
  * <ul>
- *     <li>调度:北京时间周一至周五 09:00–18:00 每整点执行一轮(含 18:00),停机期间不补跑</li>
+ *     <li>调度:北京时间每天 09:00–18:00 每整点执行一轮(含 18:00,周末与节假日同样执行),停机期间不补跑</li>
  *     <li>单轮顺序:先来信轮询(被动)→ 逐岗位消费存量(补评分/打招呼)→ 再拉新推荐(主动)</li>
  *     <li>防重叠:岗位已有 QUEUED/RUNNING 任务则本轮跳过,任务经既有 search_task 队列串行执行</li>
  *     <li>异常:单岗位失败不阻断其他岗位;风控类 {@link CliException} 立即停止本轮并上抛(既有熔断链路处理)</li>
@@ -39,11 +38,11 @@ import java.util.List;
 @ConditionalOnProperty(name = "hr-agent.auto-recruit.enabled", havingValue = "true", matchIfMissing = false)
 public class AutoRecruitScheduler {
 
-    /** 工作时段时区(北京时间) */
+    /** 运行时段时区(北京时间) */
     private static final ZoneId ZONE = ZoneId.of("Asia/Shanghai");
-    /** 工作时段起点(含) */
+    /** 运行时段起点(含) */
     private static final LocalTime WINDOW_START = LocalTime.of(9, 0);
-    /** 工作时段终点(含),整点触发由 cron 保证 */
+    /** 运行时段终点(含),整点触发由 cron 保证 */
     private static final LocalTime WINDOW_END = LocalTime.of(18, 59, 59);
 
     private final HrAgentProperties properties;
@@ -69,8 +68,8 @@ public class AutoRecruitScheduler {
         this.chatPollService = chatPollService;
     }
 
-    /** 工作日 09:00–18:00 每整点触发一轮 */
-    @Scheduled(cron = "0 0 9-18 * * MON-FRI", zone = "Asia/Shanghai")
+    /** 每天 09:00–18:00 每整点触发一轮(周末与节假日同样执行) */
+    @Scheduled(cron = "0 0 9-18 * * *", zone = "Asia/Shanghai")
     public void hourly() {
         runRound();
     }
@@ -90,9 +89,9 @@ public class AutoRecruitScheduler {
             log.debug("自动招聘未开启(hr-agent.auto-recruit.enabled=false),本轮跳过");
             return;
         }
-        // 2. 时段门禁:仅工作日 09:00–18:59
-        if (!isWorkWindow(now)) {
-            log.debug("非工作时段({}),本轮跳过", now);
+        // 2. 时段门禁:仅每天 09:00–18:59(周末与节假日同样执行)
+        if (!isRunWindow(now)) {
+            log.debug("非运行时段({}),本轮跳过", now);
             return;
         }
         runRoundInternal();
@@ -161,14 +160,11 @@ public class AutoRecruitScheduler {
     }
 
     /**
-     * 工作时段判定:周一至周五 09:00–18:59(Asia/Shanghai 时区)返回 true;周六日或时段外 false。
+     * 运行时段判定:每天 09:00–18:59(Asia/Shanghai 时区)返回 true;时段外或 null 返回 false。
+     * 周末与法定节假日不排除(用户拍板:每天执行)。
      */
-    static boolean isWorkWindow(LocalDateTime now) {
+    static boolean isRunWindow(LocalDateTime now) {
         if (now == null) {
-            return false;
-        }
-        DayOfWeek dow = now.getDayOfWeek();
-        if (dow == DayOfWeek.SATURDAY || dow == DayOfWeek.SUNDAY) {
             return false;
         }
         LocalTime time = now.toLocalTime();

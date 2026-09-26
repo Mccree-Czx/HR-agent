@@ -73,7 +73,7 @@ class AutoRecruitSchedulerTest {
 
     private Long accountId;
 
-    /** 周一 10:00(工作时段内) */
+    /** 周一 10:00(运行时段内;每天执行,时段判定与星期无关) */
     private static final LocalDateTime WORK_TIME = LocalDateTime.of(2026, 9, 28, 10, 0);
 
     @BeforeEach
@@ -116,18 +116,20 @@ class AutoRecruitSchedulerTest {
         searchTaskMapper.insert(task);
     }
 
-    // ---------- isWorkWindow 边界 ----------
+    // ---------- isRunWindow 边界 ----------
 
     @Test
-    void isWorkWindowBoundaries() {
-        // 2026-09-25 周五 / 09-26 周六 / 09-28 周一
-        assertTrue(AutoRecruitScheduler.isWorkWindow(LocalDateTime.of(2026, 9, 25, 18, 59)), "周五18:59应为true");
-        assertTrue(AutoRecruitScheduler.isWorkWindow(LocalDateTime.of(2026, 9, 25, 9, 0)), "周五9:00应为true");
-        assertFalse(AutoRecruitScheduler.isWorkWindow(LocalDateTime.of(2026, 9, 25, 19, 0)), "周五19:00应为false");
-        assertFalse(AutoRecruitScheduler.isWorkWindow(LocalDateTime.of(2026, 9, 26, 10, 0)), "周六应为false");
-        assertTrue(AutoRecruitScheduler.isWorkWindow(LocalDateTime.of(2026, 9, 28, 9, 0)), "周一9:00应为true");
-        assertFalse(AutoRecruitScheduler.isWorkWindow(LocalDateTime.of(2026, 9, 28, 8, 59)), "周一8:59应为false");
-        assertFalse(AutoRecruitScheduler.isWorkWindow(null), "null应为false");
+    void isRunWindowBoundaries() {
+        // 2026-09-25 周五 / 09-26 周六 / 09-27 周日 / 09-28 周一
+        assertTrue(AutoRecruitScheduler.isRunWindow(LocalDateTime.of(2026, 9, 25, 18, 59)), "周五18:59应为true");
+        assertTrue(AutoRecruitScheduler.isRunWindow(LocalDateTime.of(2026, 9, 25, 9, 0)), "周五9:00应为true");
+        assertFalse(AutoRecruitScheduler.isRunWindow(LocalDateTime.of(2026, 9, 25, 19, 0)), "周五19:00应为false");
+        assertTrue(AutoRecruitScheduler.isRunWindow(LocalDateTime.of(2026, 9, 26, 10, 0)), "周六应为true(每天执行)");
+        assertTrue(AutoRecruitScheduler.isRunWindow(LocalDateTime.of(2026, 9, 27, 9, 0)), "周日应为true(每天执行)");
+        assertTrue(AutoRecruitScheduler.isRunWindow(LocalDateTime.of(2026, 9, 28, 9, 0)), "周一9:00应为true");
+        assertFalse(AutoRecruitScheduler.isRunWindow(LocalDateTime.of(2026, 9, 28, 8, 59)), "周一8:59应为false");
+        assertFalse(AutoRecruitScheduler.isRunWindow(LocalDateTime.of(2026, 9, 26, 19, 0)), "周六19:00应为false(时段外)");
+        assertFalse(AutoRecruitScheduler.isRunWindow(null), "null应为false");
     }
 
     // ---------- 开关 / 时段 / 账务门禁 ----------
@@ -144,11 +146,11 @@ class AutoRecruitSchedulerTest {
     }
 
     @Test
-    void outsideWorkWindowDoesNothing() {
+    void outsideRunWindowDoesNothing() {
         createAccount();
         createActiveJd("123");
 
-        scheduler.runRound(LocalDateTime.of(2026, 9, 26, 10, 0)); // 周六
+        scheduler.runRound(LocalDateTime.of(2026, 9, 26, 19, 0)); // 周六 19:00(时段外)
 
         verify(chatPollService, never()).poll();
         verify(scoringEngine, never()).scorePending(anyLong());
