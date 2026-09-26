@@ -462,6 +462,34 @@ class ChatPollServiceTest {
         verify(paceGuard, times(2)).mark(account);
     }
 
+    // ---------- I2:im_id 缺失时按 user_id 回退匹配已知候选人 ----------
+
+    @Test
+    void knownCandidateMatchedByUserIdWhenSnapshotImIdMissing() throws Exception {
+        Jd jd = confirmedJd("招聘主管", "88888");
+        // 已招呼候选人:snapshot 无 im_id,但有推荐输出的 user_id
+        Candidate candidate = new Candidate();
+        candidate.setResumeId("r-u1");
+        candidate.setName("张三");
+        candidate.setSnapshot("{\"user_id\":\"u1\",\"name\":\"张三\"}");
+        candidate.setPassStatus("PASS");
+        candidate.setJdId(jd.getId());
+        candidateMapper.insert(candidate);
+        GreetingRecord record = greeting(candidate);
+
+        stubChatlist("{\"im_id\":\"imX\",\"user_id\":\"u1\",\"direction\":\"1\"}");
+        stubChatmsg("imX", "{\"payload\":{\"bodies\":[{\"type\":\"txt\",\"msg\":\"您好\"}]}}");
+        when(commandService.requestResume(any(), eq("r-u1"), any()))
+                .thenReturn(Optional.of(objectMapper.readTree("{\"success\":true,\"confirmed\":true}")));
+
+        chatPollService.pollOnce(account);
+
+        verify(commandService).requestResume(any(), eq("r-u1"), any());
+        assertEquals("REQUESTED", greetingMapper.selectById(record.getId()).getStatus());
+        assertEquals(1, candidateMapper.selectCount(new LambdaQueryWrapper<>()),
+                "user_id 回退命中已知候选人,不得误建陌生候选人");
+    }
+
     // ---------- 辅助 ----------
 
     private void stubChatlist(String... sessions) throws Exception {

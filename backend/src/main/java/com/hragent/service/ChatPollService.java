@@ -162,7 +162,14 @@ public class ChatPollService {
             return false;
         }
         String direction = session.path("direction").asText("");
+        // 已知候选人匹配:优先 im_id,失败时回退 user_id(终审 I2:snapshot 缺 im_id 时不致断链)
         Candidate candidate = findCandidateByImId(imId);
+        if (candidate == null) {
+            String userId = session.path("user_id").asText("").trim();
+            if (!userId.isEmpty()) {
+                candidate = findCandidateByUserId(userId);
+            }
+        }
         if (candidate != null) {
             return handleKnownCandidate(account, candidate, imId, direction, timeout);
         }
@@ -371,6 +378,24 @@ public class ChatPollService {
         for (Candidate candidate : matches) {
             JsonNode snapshot = JsonExtractor.parse(candidate.getSnapshot()).orElse(null);
             if (snapshot != null && imId.equals(snapshot.path("im_id").asText(""))) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 以 snapshot 中的 user_id(推荐输出 enusercId)匹配已知候选人(终审 I2 回退路径)。
+     * im_id 缺失/不一致时兜底,降低已招呼候选人回复落入陌生来话造成断链的风险;
+     * 仍匹配不到则交回陌生来话路径(fail-safe 不变)。
+     */
+    private Candidate findCandidateByUserId(String userId) {
+        String needle = "\"user_id\":\"" + userId + "\"";
+        List<Candidate> matches = candidateMapper.selectList(new LambdaQueryWrapper<Candidate>()
+                .like(Candidate::getSnapshot, needle));
+        for (Candidate candidate : matches) {
+            JsonNode snapshot = JsonExtractor.parse(candidate.getSnapshot()).orElse(null);
+            if (snapshot != null && userId.equals(snapshot.path("user_id").asText(""))) {
                 return candidate;
             }
         }

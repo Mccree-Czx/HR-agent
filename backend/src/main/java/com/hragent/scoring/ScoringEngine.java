@@ -2,26 +2,36 @@ package com.hragent.scoring;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.hragent.ai.AiClient;
 import com.hragent.common.BizException;
 import com.hragent.config.HrAgentProperties;
 import com.hragent.entity.Candidate;
 import com.hragent.entity.Jd;
+import com.hragent.entity.LiepinAccount;
 import com.hragent.entity.ScoreRecord;
 import com.hragent.executor.CliException;
 import com.hragent.executor.JsonExtractor;
 import com.hragent.repository.CandidateMapper;
 import com.hragent.repository.JdMapper;
+import com.hragent.repository.LiepinAccountMapper;
 import com.hragent.repository.ScoreRecordMapper;
+import com.hragent.service.LiepinCommandService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.ResourceLoader;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -36,22 +46,39 @@ import java.util.regex.Pattern;
 @Service
 public class ScoringEngine {
 
+    private static final ObjectMapper SNAPSHOT_MAPPER = new ObjectMapper();
+
+    /** 在线简历详情输出的期望字段(合并进 snapshot 供三态判定) */
+    private static final Set<String> EXPECTATION_FIELDS =
+            Set.of("want_title", "expectation_evidence", "expectation_match");
+
+    /** 职能待确认结论标识(score_record.reason 命中且快照更新时允许重评一次) */
+    private static final String PENDING_CONCLUSION_MARK = "职能待确认";
+
     private final AiClient aiClient;
     private final HrAgentProperties properties;
     private final ScoreRecordMapper scoreRecordMapper;
     private final CandidateMapper candidateMapper;
     private final JdMapper jdMapper;
     private final ResourceLoader resourceLoader;
+    private final LiepinAccountMapper accountMapper;
+    private final LiepinCommandService commandService;
+    private final CandidateScoringExecutor scoringExecutor;
 
     public ScoringEngine(AiClient aiClient, HrAgentProperties properties,
                          ScoreRecordMapper scoreRecordMapper, CandidateMapper candidateMapper,
-                         JdMapper jdMapper, ResourceLoader resourceLoader) {
+                         JdMapper jdMapper, ResourceLoader resourceLoader,
+                         LiepinAccountMapper accountMapper, LiepinCommandService commandService,
+                         @Lazy CandidateScoringExecutor scoringExecutor) {
         this.aiClient = aiClient;
         this.properties = properties;
         this.scoreRecordMapper = scoreRecordMapper;
         this.candidateMapper = candidateMapper;
         this.jdMapper = jdMapper;
         this.resourceLoader = resourceLoader;
+        this.accountMapper = accountMapper;
+        this.commandService = commandService;
+        this.scoringExecutor = scoringExecutor;
     }
 
     /** 对指定候选人评分并落库(返回评分记录) */
@@ -78,17 +105,30 @@ public class ScoringEngine {
 
         candidate.setScore(result.score());
         candidate.setPassStatus(result.pending() ? "PENDING" : (result.pass() ? "PASS" : "FAIL"));
-        candidateMapper.updateById(candidate);
+        // 「职能待确认」不触碰候选人行:pass_status 仍为 PENDING、score 保持原值;
+        // 关键作用(终审 I3)是让 candidate.updated_at 只反映「快照变更」,作为重评依据而不被评分自身自触发。
+        if (!result.pending()) {
+            candidateMapper.updateById(candidate);
+        }
         return record;
     }
 
     /**
-     * 批量补评分:遍历该岗位下 pass_status=PENDING 且尚无 (candidate, jd) 评分记录的候选人补齐评分。
-     * <p>- 已有评分记录者跳过(含「职能待确认」置 PENDING 的记录,避免重复消耗 token 死循环)
-     * <p>- 单个候选人失败不阻断其余候选人;风控异常上抛由熔断链路处理
+     * 批量补评分:遍历该岗位下 pass_status=PENDING 的候选人补齐评分(设计 §3.1(3)、终审 C1/I3)。
+     *
+     * <p>流程:
+     * <ol>
+     *     <li>缺期望证据(want_title 与 expectation_evidence 均缺)者,先读取在线简历详情
+     *         (只读平台调用,单轮上限 {@code resume-detail-batch-limit},相邻读取间隔
+     *         {@code resume-detail-interval-millis}),成功且含期望字段则合并写回 snapshot;</li>
+     *     <li>合并后进入既有三态校验 + 评分;读取失败/无期望字段 → 保持 UNKNOWN(不猜),且不中断整批
+     *         (风控类账号级异常仍上抛);</li>
+     *     <li>已有「职能待确认」结论者,仅当候选人快照更新(updated_at &gt; record.created_at)时重评一次;
+     *         其余已有记录者跳过(避免重复消耗 token 死循环);</li>
+     *     <li>单候选人经独立 bean 的 REQUIRES_NEW 事务落库,单人异常不回滚他人。</li>
+     * </ol>
      * 返回本轮成功评分的候选人数量。
      */
-    @Transactional
     public int scorePending(Long jdId) {
         List<Candidate> pending = candidateMapper.selectList(new LambdaQueryWrapper<Candidate>()
                 .eq(Candidate::getJdId, jdId)
@@ -97,16 +137,25 @@ public class ScoringEngine {
         if (pending.isEmpty()) {
             return 0;
         }
+        LiepinAccount account = firstNormalAccount();
+        int detailLimit = Math.max(0, properties.getAutoRecruit().getResumeDetailBatchLimit());
+        long detailIntervalMillis = Math.max(0, properties.getAutoRecruit().getResumeDetailIntervalMillis());
+        int detailFetches = 0;
         int scored = 0;
         for (Candidate candidate : pending) {
-            Long existing = scoreRecordMapper.selectCount(new LambdaQueryWrapper<ScoreRecord>()
-                    .eq(ScoreRecord::getCandidateId, candidate.getId())
-                    .eq(ScoreRecord::getJdId, jdId));
-            if (existing != null && existing > 0) {
-                continue;
-            }
             try {
-                scoreAndSave(candidate.getId());
+                ScoreRecord existing = latestRecord(candidate.getId(), jdId);
+                if (existing != null && !shouldReevaluate(candidate, existing)) {
+                    continue;
+                }
+                if (account != null && detailFetches < detailLimit && needsResumeDetail(candidate)) {
+                    if (detailFetches > 0 && detailIntervalMillis > 0) {
+                        sleep(detailIntervalMillis);
+                    }
+                    detailFetches++;
+                    enrichFromResumeDetail(account, candidate);
+                }
+                scoringExecutor.scoreInNewTransaction(candidate.getId());
                 scored++;
             } catch (CliException e) {
                 if (e.getType() == CliException.Type.RISK_CONTROL) {
@@ -118,6 +167,133 @@ public class ScoringEngine {
             }
         }
         return scored;
+    }
+
+    /** 取第一个 NORMAL 账号(与既有调度/打招呼口径一致) */
+    private LiepinAccount firstNormalAccount() {
+        return accountMapper.selectOne(new LambdaQueryWrapper<LiepinAccount>()
+                .eq(LiepinAccount::getLoginStatus, "NORMAL")
+                .orderByAsc(LiepinAccount::getId)
+                .last("LIMIT 1"));
+    }
+
+    /** 最近一条 (candidate, jd) 评分记录 */
+    private ScoreRecord latestRecord(Long candidateId, Long jdId) {
+        return scoreRecordMapper.selectOne(new LambdaQueryWrapper<ScoreRecord>()
+                .eq(ScoreRecord::getCandidateId, candidateId)
+                .eq(ScoreRecord::getJdId, jdId)
+                .orderByDesc(ScoreRecord::getId)
+                .last("LIMIT 1"));
+    }
+
+    /**
+     * 是否允许重评:仅「职能待确认」结论 + 候选人快照发生更新(updated_at 晚于记录创建时间)时放行一次。
+     * 评分落库不触碰候选人行(pending 结果不更新),故 updated_at 只反映快照变更,不会自触发死循环。
+     */
+    private boolean shouldReevaluate(Candidate candidate, ScoreRecord record) {
+        if (record.getReason() == null || !record.getReason().contains(PENDING_CONCLUSION_MARK)) {
+            return false;
+        }
+        return candidate.getUpdatedAt() != null && record.getCreatedAt() != null
+                && candidate.getUpdatedAt().isAfter(record.getCreatedAt());
+    }
+
+    /** snapshot 是否缺期望证据(既无 expectation_evidence 对象也无非空 want_title) */
+    private boolean needsResumeDetail(Candidate candidate) {
+        JsonNode snapshot = JsonExtractor.parse(candidate.getSnapshot()).orElse(null);
+        if (snapshot == null || !snapshot.isObject()) {
+            return true;
+        }
+        boolean hasEvidence = snapshot.has("expectation_evidence") && snapshot.get("expectation_evidence").isObject();
+        boolean hasWantTitle = snapshot.path("want_title").isTextual() && !snapshot.path("want_title").asText().isBlank();
+        return !hasEvidence && !hasWantTitle;
+    }
+
+    /**
+     * 读取在线简历详情并合并期望字段写回 snapshot(设计 §3.1(3))。
+     * 失败/无期望字段 → 只记日志并保持原快照(UNKNOWN 路径,不猜);风控类异常上抛。
+     */
+    private void enrichFromResumeDetail(LiepinAccount account, Candidate candidate) {
+        String resumeId = resumeDetailId(candidate);
+        if (resumeId.isEmpty()) {
+            log.info("候选人 {} 无可用的简历标识,跳过详情读取(保持职能待确认)", candidate.getId());
+            return;
+        }
+        JsonNode detail;
+        try {
+            Optional<JsonNode> result = commandService.resume(account, resumeId,
+                    Duration.ofMinutes(properties.getLiepin().getShortTimeoutMinutes()));
+            detail = result == null ? null : result.orElse(null);
+        } catch (CliException e) {
+            if (e.getType() == CliException.Type.RISK_CONTROL) {
+                throw e;
+            }
+            log.warn("候选人 {} 在线简历详情读取失败,保持职能待确认: {}", candidate.getId(), e.getMessage());
+            return;
+        } catch (Exception e) {
+            log.warn("候选人 {} 在线简历详情读取异常,保持职能待确认: {}", candidate.getId(), e.getMessage());
+            return;
+        }
+        if (detail == null || !detail.isObject() || !hasExpectationFields(detail)) {
+            log.info("候选人 {} 在线简历详情无期望字段,保持职能待确认", candidate.getId());
+            return;
+        }
+        candidate.setSnapshot(mergeResumeDetail(candidate.getSnapshot(), detail));
+        candidateMapper.updateById(candidate);
+        log.info("候选人 {} 已合并在线简历期望字段(简历标识={})", candidate.getId(), resumeId);
+    }
+
+    /** 简历详情读取入参:优先推荐节点的 talentId,其次搜索节点的 resume_id,最后落库 resume_id */
+    private String resumeDetailId(Candidate candidate) {
+        JsonNode snapshot = JsonExtractor.parse(candidate.getSnapshot()).orElse(null);
+        if (snapshot != null) {
+            String talentId = snapshot.path("talentId").asText("").trim();
+            if (!talentId.isEmpty()) {
+                return talentId;
+            }
+            String resumeId = snapshot.path("resume_id").asText("").trim();
+            if (!resumeId.isEmpty()) {
+                return resumeId;
+            }
+        }
+        String stored = candidate.getResumeId();
+        return stored == null ? "" : stored.trim();
+    }
+
+    /** 详情是否含可用期望字段(expectation_evidence 对象 或 非空 want_title) */
+    private boolean hasExpectationFields(JsonNode detail) {
+        JsonNode evidence = detail.get("expectation_evidence");
+        boolean evidencePresent = evidence != null && evidence.isObject();
+        boolean wantTitlePresent = detail.path("want_title").isTextual()
+                && !detail.path("want_title").asText().isBlank();
+        return evidencePresent || wantTitlePresent;
+    }
+
+    /**
+     * 合并详情进快照:期望字段强制覆盖,其余字段仅在快照缺失时补充
+     * (保留既有 im_id/user_id/salary 等,避免覆盖后影响来信路由与预筛)。
+     */
+    private String mergeResumeDetail(String snapshotJson, JsonNode detail) {
+        JsonNode existing = JsonExtractor.parse(snapshotJson).orElse(null);
+        ObjectNode merged = existing != null && existing.isObject()
+                ? ((ObjectNode) existing).deepCopy()
+                : SNAPSHOT_MAPPER.createObjectNode();
+        Iterator<Map.Entry<String, JsonNode>> fields = detail.fields();
+        while (fields.hasNext()) {
+            Map.Entry<String, JsonNode> entry = fields.next();
+            if (EXPECTATION_FIELDS.contains(entry.getKey()) || !merged.has(entry.getKey())) {
+                merged.set(entry.getKey(), entry.getValue());
+            }
+        }
+        return merged.toString();
+    }
+
+    private static void sleep(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     /** 评分核心流程(不落库,便于测试与重试) */

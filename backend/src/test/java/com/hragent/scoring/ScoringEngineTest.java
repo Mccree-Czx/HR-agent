@@ -213,55 +213,6 @@ class ScoringEngineTest {
         assertEquals("PASS", candidateMapper.selectById(c.getId()).getPassStatus());
     }
 
-    // ---------- scorePending:批量补评分 ----------
-
-    @Test
-    void scorePendingScoresUnscoredCandidates() {
-        when(aiClient.chat(anyString(), anyString()))
-                .thenReturn("{\"score\":75,\"pass\":true,\"summary\":\"ok\",\"reasons\":[\"a\"]}");
-        candidate("{\"name\":\"张三\",\"salary\":\"20-30K\",\"want_title\":\"软件工程师\"}");
-        candidate("{\"name\":\"李四\",\"salary\":\"20-30K\",\"want_title\":\"软件工程师\"}");
-
-        int scored = scoringEngine.scorePending(jd.getId());
-
-        assertEquals(2, scored);
-        assertEquals(2, scoreRecordMapper.selectCount(null));
-        verify(aiClient, times(2)).chat(anyString(), anyString());
-    }
-
-    @Test
-    void scorePendingSkipsCandidatesWithExistingRecord() {
-        when(aiClient.chat(anyString(), anyString()))
-                .thenReturn("{\"score\":75,\"pass\":true,\"summary\":\"ok\",\"reasons\":[\"a\"]}");
-        // A:已有 (candidate, jd) 评分记录(如「职能待确认」遗留 PENDING)→ 不重复评分
-        Candidate a = candidate("{\"name\":\"张三\",\"salary\":\"20-30K\"}");
-        ScoreRecord existing = new ScoreRecord();
-        existing.setCandidateId(a.getId());
-        existing.setJdId(jd.getId());
-        existing.setScore(0);
-        scoreRecordMapper.insert(existing);
-        // B:无记录 → 应被补评分
-        candidate("{\"name\":\"李四\",\"salary\":\"20-30K\",\"want_title\":\"软件工程师\"}");
-
-        int scored = scoringEngine.scorePending(jd.getId());
-
-        assertEquals(1, scored, "已有记录的候选人应跳过");
-        verify(aiClient, times(1)).chat(anyString(), anyString());
-        assertEquals(2, scoreRecordMapper.selectCount(null), "不新增重复评分记录");
-    }
-
-    @Test
-    void scorePendingOnlySelectsPendingStatus() {
-        Candidate pass = candidate("{\"name\":\"张三\",\"salary\":\"20-30K\",\"want_title\":\"软件工程师\"}");
-        pass.setPassStatus("PASS");
-        candidateMapper.updateById(pass);
-        Candidate fail = candidate("{\"name\":\"李四\",\"salary\":\"20-30K\",\"want_title\":\"软件工程师\"}");
-        fail.setPassStatus("FAIL");
-        candidateMapper.updateById(fail);
-
-        int scored = scoringEngine.scorePending(jd.getId());
-
-        assertEquals(0, scored, "非 PENDING 候选人不应被补评分");
-        verify(aiClient, never()).chat(anyString(), anyString());
-    }
+    // scorePending(批量补评分,含在线简历详情读取与独立事务)见 ScoringEnginePendingTest:
+    // 其使用 REQUIRES_NEW 独立事务,需在无外层测试事务的环境下验证。
 }

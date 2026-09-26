@@ -125,6 +125,12 @@ public class HrAgentProperties {
 
         /** 单轮单岗位打招呼上限(取消日配额后的工作量边界,可配置) */
         private int greetBatchLimit = 5;
+
+        /** 单轮「在线简历详情」读取上限(只读平台调用,与推荐批次同量级,默认 20) */
+        private int resumeDetailBatchLimit = 20;
+
+        /** 相邻两次简历详情读取的最小间隔(毫秒,读操作轻节流,默认 1000) */
+        private int resumeDetailIntervalMillis = 1000;
     }
 
     @Data
