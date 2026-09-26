@@ -26,12 +26,15 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -52,8 +55,17 @@ public class ScoringEngine {
     private static final Set<String> EXPECTATION_FIELDS =
             Set.of("want_title", "expectation_evidence", "expectation_match");
 
-    /** 职能待确认结论标识(score_record.reason 命中且快照更新时允许重评一次) */
+    /** 职能待确认结论标识(score_record.reason 命中且期望数据指纹变化时允许重评一次) */
     private static final String PENDING_CONCLUSION_MARK = "职能待确认";
+
+    /**
+     * 「职能待确认」结论中携带的期望数据指纹标记(终审 I3①)。
+     * 写库形如 {@code ... 职能待确认(fingerprint:<hash>)};解析容错:reason 被人工/其他格式覆盖时未命中返回 null。
+     */
+    private static final Pattern FINGERPRINT_PATTERN = Pattern.compile("fingerprint:([0-9a-f]+)");
+
+    /** 期望指纹长度(SHA-256 十六进制前缀:足够抗碰撞且便于阅读) */
+    private static final int FINGERPRINT_LENGTH = 16;
 
     private final AiClient aiClient;
     private final HrAgentProperties properties;
@@ -98,7 +110,12 @@ public class ScoringEngine {
         record.setCandidateId(candidateId);
         record.setJdId(jd.getId());
         record.setScore(result.score());
-        record.setReason(result.summary() + " | " + String.join("; ", result.reasons()));
+        String reason = result.summary() + " | " + String.join("; ", result.reasons());
+        if (result.pending()) {
+            // 终审 I3① 修复:在「职能待确认」结论里固化当时的期望数据指纹,作为后续基于内容变化的重评判据
+            reason = reason + " | " + pendingMarker(candidate);
+        }
+        record.setReason(reason);
         record.setRuleVersion(properties.getScoring().getRuleVersion());
         record.setModel(properties.getAi().getModel());
         scoreRecordMapper.insert(record);
@@ -123,7 +140,7 @@ public class ScoringEngine {
      *         {@code resume-detail-interval-millis}),成功且含期望字段则合并写回 snapshot;</li>
      *     <li>合并后进入既有三态校验 + 评分;读取失败/无期望字段 → 保持 UNKNOWN(不猜),且不中断整批
      *         (风控类账号级异常仍上抛);</li>
-     *     <li>已有「职能待确认」结论者,仅当候选人快照更新(updated_at &gt; record.created_at)时重评一次;
+     *     <li>已有「职能待确认」结论者,仅当候选人期望数据内容指纹发生变化(不再依赖 updated_at)时重评一次;
      *         其余已有记录者跳过(避免重复消耗 token 死循环);</li>
      *     <li>单候选人经独立 bean 的 REQUIRES_NEW 事务落库,单人异常不回滚他人。</li>
      * </ol>
@@ -187,15 +204,107 @@ public class ScoringEngine {
     }
 
     /**
-     * 是否允许重评:仅「职能待确认」结论 + 候选人快照发生更新(updated_at 晚于记录创建时间)时放行一次。
-     * 评分落库不触碰候选人行(pending 结果不更新),故 updated_at 只反映快照变更,不会自触发死循环。
+     * 是否允许重评(终审 I3① 修复:改用「期望数据内容指纹」,不再依赖 candidate.updated_at)。
+     *
+     * <p>原实现的 {@code candidate.updated_at > record.created_at} 在生产环境恒不成立:MyBatis-Plus
+     * {@code updateById} 会显式回写旧时间戳值,抑制 MySQL {@code ON UPDATE CURRENT_TIMESTAMP},
+     * 快照变更后 updated_at 不前移 → 重评门恒关闭 → 「职能待确认」候选人首轮即终局、永久 PENDING。
+     *
+     * <p>现行规则:
+     * <ul>
+     *     <li>无记录 → 由调用方 {@link #scorePending(Long)} 直接评分(本方法不参与);</li>
+     *     <li>有记录且非「职能待确认」→ 跳过(已有定论,不重复消耗 token);</li>
+     *     <li>是「职能待确认」且记录指纹 == 当前期望指纹 → 跳过(内容无变化,防每轮空转);</li>
+     *     <li>是「职能待确认」且指纹不同(含历史记录未携带指纹,或已补齐/变更期望数据)→ 放行重评一次。</li>
+     * </ul>
      */
     private boolean shouldReevaluate(Candidate candidate, ScoreRecord record) {
         if (record.getReason() == null || !record.getReason().contains(PENDING_CONCLUSION_MARK)) {
             return false;
         }
-        return candidate.getUpdatedAt() != null && record.getCreatedAt() != null
-                && candidate.getUpdatedAt().isAfter(record.getCreatedAt());
+        String recordedFingerprint = extractFingerprint(record.getReason());
+        // 记录未携带指纹(历史遗留/被覆盖)视为「未知」,放行一次重评以自愈;解析成功后按内容比对。
+        return recordedFingerprint == null || !recordedFingerprint.equals(expectationFingerprint(candidate));
+    }
+
+    /** 「职能待确认」结论标记(携带期望指纹),格式 {@code 职能待确认(fingerprint:<hash>)} */
+    private String pendingMarker(Candidate candidate) {
+        return PENDING_CONCLUSION_MARK + "(fingerprint:" + expectationFingerprint(candidate) + ")";
+    }
+
+    /** 从 score_record.reason 解析期望指纹;未命中/格式被覆盖返回 null(容错,不抛异常) */
+    private static String extractFingerprint(String reason) {
+        if (reason == null) {
+            return null;
+        }
+        Matcher matcher = FINGERPRINT_PATTERN.matcher(reason);
+        return matcher.find() ? matcher.group(1) : null;
+    }
+
+    /**
+     * 候选人当前期望数据指纹:对 snapshot 的 {@code want_title} 与 {@code expectation_evidence}
+     * 规范化后取 SHA-256 十六进制前缀。规范化按键排序 JSON 对象,保证字段顺序不同但内容相同 → 指纹一致;
+     * 期望由缺失变为补齐(或内容变更)→ 指纹不同。仅在期望字段上计算,避免无关字段变更触发无谓重评。
+     */
+    String expectationFingerprint(Candidate candidate) {
+        return sha256Hex(canonicalExpectation(candidate.getSnapshot())).substring(0, FINGERPRINT_LENGTH);
+    }
+
+    /** 期望字段规范化字符串(缺失/非对象均映射为稳定的空值表示) */
+    private String canonicalExpectation(String snapshotJson) {
+        JsonNode snapshot = JsonExtractor.parse(snapshotJson).orElse(null);
+        if (snapshot == null || !snapshot.isObject()) {
+            return "want_title=;evidence=null";
+        }
+        return "want_title=" + snapshot.path("want_title").asText("").trim()
+                + ";evidence=" + canonicalJson(snapshot.get("expectation_evidence"));
+    }
+
+    /** JSON 规范化:对象按键升序排列(递归),数组保持顺序,保证同内容不同字段顺序产生相同串 */
+    private String canonicalJson(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return "null";
+        }
+        if (node.isObject()) {
+            TreeMap<String, JsonNode> sorted = new TreeMap<>();
+            node.fields().forEachRemaining(entry -> sorted.put(entry.getKey(), entry.getValue()));
+            StringBuilder sb = new StringBuilder("{");
+            boolean first = true;
+            for (Map.Entry<String, JsonNode> entry : sorted.entrySet()) {
+                if (!first) {
+                    sb.append(',');
+                }
+                first = false;
+                sb.append('"').append(entry.getKey()).append("\":").append(canonicalJson(entry.getValue()));
+            }
+            return sb.append('}').toString();
+        }
+        if (node.isArray()) {
+            StringBuilder sb = new StringBuilder("[");
+            for (int i = 0; i < node.size(); i++) {
+                if (i > 0) {
+                    sb.append(',');
+                }
+                sb.append(canonicalJson(node.get(i)));
+            }
+            return sb.append(']').toString();
+        }
+        return node.toString();
+    }
+
+    /** SHA-256 十六进制小写摘要 */
+    private static String sha256Hex(String text) {
+        try {
+            byte[] hash = MessageDigest.getInstance("SHA-256")
+                    .digest(text.getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(hash.length * 2);
+            for (byte b : hash) {
+                sb.append(Character.forDigit((b >> 4) & 0xF, 16)).append(Character.forDigit(b & 0xF, 16));
+            }
+            return sb.toString();
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 算法不可用", e);
+        }
     }
 
     /** snapshot 是否缺期望证据(既无 expectation_evidence 对象也无非空 want_title) */

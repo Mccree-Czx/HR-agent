@@ -21,7 +21,6 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
-import java.time.LocalDateTime;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -222,48 +221,90 @@ class ScoringEnginePendingTest {
         assertEquals("PASS", candidateMapper.selectById(b.getId()).getPassStatus());
     }
 
-    // ---------- I3①:快照更新后对「职能待确认」重评一次 ----------
+    // ---------- I3①:期望数据内容指纹变化后对「职能待确认」重评(不依赖 updated_at) ----------
 
+    /**
+     * 真实写入路径(不手工改 updated_at):首轮详情读取失败 → 落「职能待确认」记录(携带当时期望指纹);
+     * 快照补齐期望字段(模拟 enrich 成功写回)→ 下一轮 scorePending 指纹变化触发重评并可 PASS。
+     */
     @Test
-    void scorePendingReevaluatesPendingConclusionAfterSnapshotUpdate() {
+    void scorePendingReevaluatesWhenExpectationFingerprintChanges() {
+        createNormalAccount();
+        // 首轮:详情读取返回空(等价读取失败/无期望)→ UNKNOWN,记录携带「空期望」指纹
+        when(commandService.resume(any(), eq("res-1"), any())).thenReturn(Optional.empty());
+        Candidate c = candidate("{\"name\":\"张三\",\"salary\":\"20-30K\",\"talentId\":\"res-1\"}");
+
+        assertEquals(1, scoringEngine.scorePending(jd.getId()), "首轮应写入待确认记录");
+        assertEquals("PENDING", candidateMapper.selectById(c.getId()).getPassStatus());
+        ScoreRecord first = scoreRecordMapper.selectOne(new LambdaQueryWrapper<>());
+        assertTrue(first.getReason().contains("fingerprint:"), "待确认记录应携带期望指纹");
+
+        // 模拟 enrich 成功写回:仅通过真实更新路径补齐快照期望字段(不触碰 updated_at)
+        Candidate loaded = candidateMapper.selectById(c.getId());
+        loaded.setSnapshot("{\"name\":\"张三\",\"salary\":\"20-30K\",\"talentId\":\"res-1\","
+                + "\"want_title\":\"软件工程师\"}");
+        candidateMapper.updateById(loaded);
+
+        // 次轮:期望指纹变化 → 重评 → PASS
         when(aiClient.chat(anyString(), anyString()))
                 .thenReturn("{\"score\":80,\"pass\":true,\"summary\":\"ok\",\"reasons\":[\"a\"]}");
-        Candidate c = candidate("{\"name\":\"张三\",\"want_title\":\"软件工程师\"}");
-        ScoreRecord stale = new ScoreRecord();
-        stale.setCandidateId(c.getId());
-        stale.setJdId(jd.getId());
-        stale.setScore(0);
-        stale.setReason("职能待确认: 缺少可靠的求职期望或字段格式异常");
-        stale.setCreatedAt(LocalDateTime.now().minusMinutes(5));
-        scoreRecordMapper.insert(stale);
-        // 模拟快照更新:候选人 updated_at 晚于遗留「职能待确认」记录
-        c.setSnapshot("{\"name\":\"张三\",\"want_title\":\"软件工程师\"}");
-        c.setUpdatedAt(LocalDateTime.now());
-        candidateMapper.updateById(c);
-
-        int scored = scoringEngine.scorePending(jd.getId());
-
-        assertEquals(1, scored, "快照更新后应重评一次");
+        assertEquals(1, scoringEngine.scorePending(jd.getId()), "期望指纹变化后应重评一次");
         assertEquals("PASS", candidateMapper.selectById(c.getId()).getPassStatus());
-        assertEquals(2, scoreRecordMapper.selectCount(null), "重评应追加新记录");
+        assertEquals(2, scoreRecordMapper.selectCount(null), "重评沿用既有 insert 追加历史记录");
     }
 
+    /** 期望指纹无变化 → 不重试:第二轮既不再读详情,也不调 AI,也不追加记录。 */
     @Test
-    void scorePendingSkipsPendingConclusionWithoutSnapshotUpdate() {
-        Candidate c = candidate("{\"name\":\"张三\"}");
-        ScoreRecord stale = new ScoreRecord();
-        stale.setCandidateId(c.getId());
-        stale.setJdId(jd.getId());
-        stale.setScore(0);
-        stale.setReason("职能待确认: 缺少可靠的求职期望或字段格式异常");
-        // 记录晚于候选人更新时间 → 视为快照未更新
-        stale.setCreatedAt(LocalDateTime.now().plusMinutes(5));
-        scoreRecordMapper.insert(stale);
+    void scorePendingSkipsPendingConclusionWhenFingerprintUnchanged() {
+        createNormalAccount();
+        when(commandService.resume(any(), eq("res-1"), any())).thenReturn(Optional.empty());
+        candidate("{\"name\":\"张三\",\"talentId\":\"res-1\"}");
 
-        int scored = scoringEngine.scorePending(jd.getId());
+        scoringEngine.scorePending(jd.getId());           // 首轮:写待确认记录
+        int second = scoringEngine.scorePending(jd.getId()); // 次轮:期望指纹未变 → 跳过
 
-        assertEquals(0, scored, "快照未更新不得重评");
+        assertEquals(0, second, "期望指纹未变化不得重评");
+        verify(commandService, times(1)).resume(any(), eq("res-1"), any());
         verify(aiClient, never()).chat(anyString(), anyString());
+        assertEquals(1, scoreRecordMapper.selectCount(null), "无变化不追加记录");
+    }
+
+    /** 详情读取仍失败(快照无期望)→ 仍 PENDING,行为与修复前一致(不重试、不 PASS)。 */
+    @Test
+    void scorePendingKeepsPendingWhenDetailStillMissing() {
+        createNormalAccount();
+        when(commandService.resume(any(), eq("res-1"), any())).thenReturn(Optional.empty());
+        Candidate c = candidate("{\"name\":\"张三\",\"talentId\":\"res-1\"}");
+
+        scoringEngine.scorePending(jd.getId());
+        scoringEngine.scorePending(jd.getId());
+
+        Candidate after = candidateMapper.selectById(c.getId());
+        assertEquals("PENDING", after.getPassStatus());
+        assertNotEquals("PASS", after.getPassStatus());
+        assertTrue(after.getSnapshot().contains("talentId"), "快照保持原样(未猜期望)");
+        verify(aiClient, never()).chat(anyString(), anyString());
+        ScoreRecord record = scoreRecordMapper.selectOne(new LambdaQueryWrapper<>());
+        assertTrue(record.getReason().contains("职能待确认"), "记录仍标记职能待确认");
+    }
+
+    /** 指纹稳定性:JSON 字段顺序不同但内容一致 → 同指纹;期望内容变化/补齐 → 不同指纹。 */
+    @Test
+    void expectationFingerprintStableAcrossKeyOrderAndChangesWithContent() {
+        Candidate a = candidate("{\"name\":\"张三\",\"want_title\":\"软件工程师\","
+                + "\"expectation_evidence\":{\"source\":\"resumeDetailVo.jobWant.jobTitleNames\","
+                + "\"entries\":[{\"title\":\"软件工程师\"}]}}");
+        Candidate b = candidate("{\"expectation_evidence\":{\"entries\":[{\"title\":\"软件工程师\"}],"
+                + "\"source\":\"resumeDetailVo.jobWant.jobTitleNames\"},\"want_title\":\"软件工程师\",\"name\":\"张三\"}");
+        Candidate changed = candidate("{\"name\":\"张三\",\"want_title\":\"人力资源总监\"}");
+        Candidate empty = candidate("{\"name\":\"张三\"}");
+
+        assertEquals(scoringEngine.expectationFingerprint(a), scoringEngine.expectationFingerprint(b),
+                "字段顺序不同但期望内容相同 → 指纹一致");
+        assertNotEquals(scoringEngine.expectationFingerprint(a), scoringEngine.expectationFingerprint(changed),
+                "期望内容变化 → 指纹不同");
+        assertNotEquals(scoringEngine.expectationFingerprint(a), scoringEngine.expectationFingerprint(empty),
+                "期望缺失与补齐 → 指纹不同");
     }
 
     // ---------- I3②:单候选独立事务,前序已提交结果不被后续致命异常回滚 ----------
