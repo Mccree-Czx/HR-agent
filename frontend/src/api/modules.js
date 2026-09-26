@@ -38,7 +38,16 @@ export const auditApi = {
 }
 
 export const candidateApi = {
-  page: (params) => http.get('/candidate', { params })
+  page: (params) => http.get('/candidate', { params }),
+  // 简历下载(blob):HR 按分配岗位授权;前端转 objectURL 打开预览
+  resumeBlob: (id) => http.get(`/candidate/${id}/resume`, { responseType: 'blob' })
+}
+
+export const autoRecruitApi = {
+  status: () => http.get('/auto-recruit/status'),
+  setEnabled: (data) => http.put('/auto-recruit/enabled', data),
+  // 手动一轮为同步执行(可能耗时较长),关闭 axios 超时
+  runOnce: () => http.post('/auto-recruit/run-once', null, { timeout: 0 })
 }
 
 export const recruitApi = {

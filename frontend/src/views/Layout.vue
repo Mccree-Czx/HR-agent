@@ -12,14 +12,22 @@
     <el-container>
       <el-header class="header">
         <span class="page-title">{{ $route.meta.title }}</span>
-        <el-dropdown @command="handleCommand">
-          <span class="user-name">{{ username }}</span>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item command="logout">退出登录</el-dropdown-item>
-            </el-dropdown-menu>
+        <div class="header-right">
+          <template v-if="isAdmin">
+            <el-tooltip content="关闭后:仍自动检测来信/下载附件/评分/拉推荐,但不主动发消息(打招呼/索要);手动操作不受影响" placement="bottom">
+              <el-switch v-model="arEnabled" :loading="arLoading" @change="toggleAutoRecruit" />
+            </el-tooltip>
+            <span class="ar-status" :class="{ warn: !!ar.accountWarning }">{{ arStatusText }}</span>
           </template>
-        </el-dropdown>
+          <el-dropdown @command="handleCommand">
+            <span class="user-name">{{ username }}</span>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="logout">退出登录</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </div>
       </el-header>
       <el-main>
         <router-view />
@@ -29,12 +37,71 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import { autoRecruitApi } from '../api/modules'
 
 const router = useRouter()
 const username = localStorage.getItem('username') || ''
 const isAdmin = computed(() => localStorage.getItem('role') === 'ADMIN')
+
+// ---------- 自动招聘顶部常驻面板(仅 ADMIN 可见) ----------
+const ar = ref({ enabled: false, running: false, runningSince: null, lastRun: null, nextRunAt: null, accountWarning: null })
+const arEnabled = ref(false)
+const arLoading = ref(false)
+let arTimer = null
+
+async function loadAutoRecruit() {
+  if (!isAdmin.value) return
+  try {
+    const res = await autoRecruitApi.status()
+    ar.value = res.data
+    arEnabled.value = res.data.enabled
+  } catch {
+    // 静默:拦截器已提示
+  }
+}
+
+async function toggleAutoRecruit(value) {
+  arLoading.value = true
+  try {
+    const res = await autoRecruitApi.setEnabled({ enabled: value })
+    ar.value = res.data
+    arEnabled.value = res.data.enabled
+    ElMessage.success(value ? '自动外发已开启' : '自动外发已关闭(只收简历,不发消息)')
+  } catch {
+    arEnabled.value = !value // 失败回滚
+  } finally {
+    arLoading.value = false
+  }
+}
+
+const arStatusText = computed(() => {
+  const s = ar.value
+  if (s.accountWarning) return s.accountWarning
+  if (s.running) return `运行中(自 ${fmtTime(s.runningSince)})`
+  const parts = [s.enabled ? '外发开' : '外发关·只收']
+  if (s.lastRun?.at) {
+    parts.push(s.lastRun.noAccount ? '上轮无账号' : `上轮 ${fmtTime(s.lastRun.at)} 发声${s.lastRun.greeted ?? 0}`)
+  }
+  if (s.nextRunAt) parts.push(`下次 ${fmtTime(s.nextRunAt)}`)
+  return parts.join(' · ')
+})
+
+function fmtTime(t) {
+  if (!t) return '-'
+  return String(t).slice(5, 16).replace('T', ' ')
+}
+
+onMounted(() => {
+  loadAutoRecruit()
+  if (isAdmin.value) arTimer = setInterval(loadAutoRecruit, 60000)
+})
+
+onUnmounted(() => {
+  if (arTimer) clearInterval(arTimer)
+})
 
 function handleCommand(command) {
   if (command === 'logout') {
@@ -81,6 +148,23 @@ function handleCommand(command) {
   justify-content: space-between;
   background: var(--hr-surface);
   border-bottom: 1px solid var(--hr-border);
+}
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.ar-status {
+  font-size: 12px;
+  color: var(--hr-text-2);
+  max-width: 460px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ar-status.warn {
+  color: var(--el-color-danger);
+  font-weight: 600;
 }
 .page-title {
   font-size: 16px;

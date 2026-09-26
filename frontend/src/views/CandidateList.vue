@@ -13,13 +13,18 @@
         <el-option label="已通过" value="PASS" />
         <el-option label="未通过" value="FAIL" />
       </el-select>
-      <template v-if="activeTab === 'received'">
-        <el-button type="primary" :disabled="!selectedJdId" @click="runScore">批量评分(10人)</el-button>
-        <el-button type="success" :disabled="!selectedJdId" @click="runGreet">批量打招呼(10人)</el-button>
-        <el-button :disabled="!selectedJdId" @click="runCollect">检测回复并索要简历</el-button>
-        <el-button type="warning" :disabled="!selectedJdId" :loading="recommendLoading" @click="runRecommend">拉取平台推荐</el-button>
+      <template v-if="activeTab === 'received' && isAdmin">
+        <el-button type="warning" :loading="runOnceLoading" @click="runOnce">立即运行一轮</el-button>
+        <el-button @click="advancedVisible = !advancedVisible">{{ advancedVisible ? '收起高级操作' : '高级操作' }}</el-button>
       </template>
-      <span v-else class="tab-hint">待分配:无有效岗位的候选人(含已入库附件),需人工指派岗位</span>
+      <span v-if="activeTab === 'unassigned'" class="tab-hint">待分配:无有效岗位的候选人(含已入库附件),需人工指派岗位</span>
+    </div>
+
+    <div v-if="activeTab === 'received' && isAdmin && advancedVisible" class="advanced-panel">
+      <el-button type="primary" :disabled="!selectedJdId" @click="runScore">批量评分(10人)</el-button>
+      <el-button type="success" :disabled="!selectedJdId" @click="runGreet">批量打招呼(10人)</el-button>
+      <el-button :disabled="!selectedJdId" @click="runCollect">检测回复并索要简历</el-button>
+      <el-button type="warning" :disabled="!selectedJdId" :loading="recommendLoading" @click="runRecommend">拉取平台推荐</el-button>
     </div>
 
     <el-table :data="rows" v-loading="loading" border>
@@ -64,9 +69,10 @@
           <el-tag v-else type="info" size="small">未入库</el-tag>
         </template>
       </el-table-column>
-      <el-table-column v-if="activeTab === 'received'" label="操作" width="140" fixed="right">
+      <el-table-column v-if="activeTab === 'received'" label="操作" width="190" fixed="right">
         <template #default="{ row }">
-          <el-button link type="primary" @click="redo(row.candidate.id)">重新打分</el-button>
+          <el-button v-if="row.resumeFile" link type="primary" @click="viewResume(row)">查看简历</el-button>
+          <el-button v-if="isAdmin" link type="primary" @click="redo(row.candidate.id)">重新打分</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -84,7 +90,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { jdApi, candidateApi, recruitApi, searchTaskApi } from '../api/modules'
+import { jdApi, candidateApi, recruitApi, searchTaskApi, autoRecruitApi } from '../api/modules'
 
 // 待分配视图仅 ADMIN 可见:后端 unassigned=true 亦仅对 ADMIN 生效(评审 I-1)
 const isAdmin = computed(() => localStorage.getItem('role') === 'ADMIN')
@@ -176,6 +182,35 @@ async function redo(candidateId) {
   load()
 }
 
+// ---------- 自动招聘操作(仅 ADMIN;手动不受开关限制) ----------
+const advancedVisible = ref(false)
+const runOnceLoading = ref(false)
+
+async function runOnce() {
+  runOnceLoading.value = true
+  try {
+    await autoRecruitApi.runOnce()
+    ElMessage.success('一轮已执行完成')
+    load()
+  } catch {
+    // 拦截器已提示(如“已有轮次正在运行”)
+  } finally {
+    runOnceLoading.value = false
+  }
+}
+
+// ---------- 简历查看(blob 转 objectURL 预览;HR 按分配岗位授权) ----------
+async function viewResume(row) {
+  try {
+    const blob = await candidateApi.resumeBlob(row.candidate.id)
+    const url = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }))
+    window.open(url, '_blank')
+    setTimeout(() => URL.revokeObjectURL(url), 5 * 60 * 1000)
+  } catch {
+    // 拦截器已提示(403/404)
+  }
+}
+
 const recommendLoading = ref(false)
 
 async function runRecommend() {
@@ -215,6 +250,11 @@ onMounted(async () => {
   color: var(--hr-text-3);
   font-size: 12px;
   align-self: center;
+}
+.advanced-panel {
+  margin: -4px 0 12px;
+  display: flex;
+  gap: 8px;
 }
 </style>
 
