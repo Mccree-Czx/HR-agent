@@ -19,11 +19,18 @@ import com.hragent.repository.ScoreRecordMapper;
 import com.hragent.security.LoginUser;
 import com.hragent.security.UserContext;
 import com.hragent.service.UserJdService;
+import com.hragent.storage.StorageService;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -42,16 +49,19 @@ public class CandidateController {
     private final ResumeFileMapper resumeFileMapper;
     private final JdMapper jdMapper;
     private final UserJdService userJdService;
+    private final StorageService storageService;
 
     public CandidateController(CandidateMapper candidateMapper, ScoreRecordMapper scoreRecordMapper,
                                GreetingRecordMapper greetingMapper, ResumeFileMapper resumeFileMapper,
-                               JdMapper jdMapper, UserJdService userJdService) {
+                               JdMapper jdMapper, UserJdService userJdService,
+                               StorageService storageService) {
         this.candidateMapper = candidateMapper;
         this.scoreRecordMapper = scoreRecordMapper;
         this.greetingMapper = greetingMapper;
         this.resumeFileMapper = resumeFileMapper;
         this.jdMapper = jdMapper;
         this.userJdService = userJdService;
+        this.storageService = storageService;
     }
 
     @GetMapping
@@ -124,6 +134,57 @@ public class CandidateController {
         empty.setRecords(new ArrayList<>());
         empty.setTotal(0);
         return empty;
+    }
+
+    /**
+     * 简历文件下载(HR 筛选工作台,2026-09-26):ADMIN 或候选人所属岗位在分配范围内才可访问。
+     * 越权 403;候选人不存在/未入库/存储缺失 404;返回 PDF 流(inline,可预览或下载)。
+     */
+    @GetMapping("/{id}/resume")
+    public ResponseEntity<byte[]> resume(@PathVariable Long id) {
+        LoginUser user = UserContext.get();
+        Set<Long> allowed = userJdService.allowedJdIds(user.getUserId(), user.getRole());
+
+        Candidate candidate = candidateMapper.selectById(id);
+        if (candidate == null) {
+            throw BizException.notFound("候选人不存在");
+        }
+        if (allowed != null && (candidate.getJdId() == null || !allowed.contains(candidate.getJdId()))) {
+            throw BizException.forbidden("无权查看该候选人简历");
+        }
+
+        ResumeFile file = resumeFileMapper.selectOne(new LambdaQueryWrapper<ResumeFile>()
+                .eq(ResumeFile::getCandidateId, id)
+                .orderByDesc(ResumeFile::getId)
+                .last("LIMIT 1"));
+        if (file == null || file.getObjectKey() == null) {
+            throw BizException.notFound("简历未入库");
+        }
+        byte[] bytes = storageService.load(file.getObjectKey());
+        if (bytes == null || bytes.length == 0) {
+            throw BizException.notFound("简历文件缺失");
+        }
+
+        MediaType mediaType = "pdf".equalsIgnoreCase(file.getFormat())
+                ? MediaType.APPLICATION_PDF : MediaType.APPLICATION_OCTET_STREAM;
+        return ResponseEntity.ok()
+                .contentType(mediaType)
+                .contentLength(bytes.length)
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.inline()
+                        .filename(displayName(file), StandardCharsets.UTF_8).build().toString())
+                .body(bytes);
+    }
+
+    /** 展示文件名:取 objectKey 文件名部分并去除候选 ID 前缀(objectKey 形如 resumes/20260926/{id}-{safeName}) */
+    private static String displayName(ResumeFile file) {
+        String key = file.getObjectKey();
+        int slash = key.lastIndexOf('/');
+        String base = slash >= 0 ? key.substring(slash + 1) : key;
+        String prefix = file.getCandidateId() + "-";
+        if (base.startsWith(prefix)) {
+            base = base.substring(prefix.length());
+        }
+        return base.isBlank() ? "resume.pdf" : base;
     }
 
     /** 组装台账:批量取最新评分/打招呼/简历文件 */
