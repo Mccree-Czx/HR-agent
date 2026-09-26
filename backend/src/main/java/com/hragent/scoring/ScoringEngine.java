@@ -352,14 +352,16 @@ public class ScoringEngine {
         log.info("候选人 {} 已合并在线简历期望字段(简历标识={})", candidate.getId(), resumeId);
     }
 
-    /** 简历详情读取入参:优先推荐节点的 talentId,其次搜索节点的 resume_id,最后落库 resume_id */
+    /**
+     * 简历详情读取入参:优先快照内的搜索节点 resume_id,其次落库 resume_id 主列。
+     *
+     * <p>注意:推荐节点的 {@code snapshot.talentId} 为 enresId(56 位 hex),并非 CLI
+     * {@code resume} 命令的有效标识(resIdEncode,25 字符),用作详情入参会返回「简历信息不存在」,
+     * 故不再采用(真机联调确认)。
+     */
     private String resumeDetailId(Candidate candidate) {
         JsonNode snapshot = JsonExtractor.parse(candidate.getSnapshot()).orElse(null);
         if (snapshot != null) {
-            String talentId = snapshot.path("talentId").asText("").trim();
-            if (!talentId.isEmpty()) {
-                return talentId;
-            }
             String resumeId = snapshot.path("resume_id").asText("").trim();
             if (!resumeId.isEmpty()) {
                 return resumeId;

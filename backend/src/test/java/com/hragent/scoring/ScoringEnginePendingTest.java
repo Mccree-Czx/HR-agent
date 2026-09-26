@@ -93,8 +93,12 @@ class ScoringEnginePendingTest {
     }
 
     private Candidate candidate(String snapshot) {
+        return candidate(snapshot, "r" + System.nanoTime());
+    }
+
+    private Candidate candidate(String snapshot, String storedResumeId) {
         Candidate c = new Candidate();
-        c.setResumeId("r" + System.nanoTime());
+        c.setResumeId(storedResumeId);
         c.setName("测试候选人");
         c.setSnapshot(snapshot);
         c.setPassStatus("PENDING");
@@ -172,7 +176,9 @@ class ScoringEnginePendingTest {
         createNormalAccount();
         when(aiClient.chat(anyString(), anyString()))
                 .thenReturn("{\"score\":75,\"pass\":true,\"summary\":\"ok\",\"reasons\":[\"a\"]}");
-        Candidate c = candidate("{\"name\":\"张三\",\"salary\":\"20-30K\",\"talentId\":\"res-1\"}");
+        // 快照同时含推荐节点 talentId(enresId) 与搜索节点 resume_id → 详情必须用 resume_id 读取
+        Candidate c = candidate("{\"name\":\"张三\",\"salary\":\"20-30K\","
+                + "\"talentId\":\"talent-enres-id\",\"resume_id\":\"res-1\"}");
         when(commandService.resume(any(), eq("res-1"), any())).thenReturn(Optional.of(
                 objectMapper.readTree("{\"want_title\":\"软件工程师\",\"expectation_evidence\":{"
                         + "\"source\":\"resumeDetailVo.jobWant.jobTitleNames\","
@@ -184,14 +190,15 @@ class ScoringEnginePendingTest {
         Candidate after = candidateMapper.selectById(c.getId());
         assertEquals("PASS", after.getPassStatus(), "补齐期望后应可 PASS");
         assertTrue(after.getSnapshot().contains("expectation_evidence"), "简历详情期望字段应合并写回快照");
-        assertTrue(after.getSnapshot().contains("\"talentId\":\"res-1\""), "合并不得丢失既有字段");
+        assertTrue(after.getSnapshot().contains("\"talentId\":\"talent-enres-id\""), "合并不得丢失既有字段");
         verify(commandService).resume(any(), eq("res-1"), any());
+        verify(commandService, never()).resume(any(), eq("talent-enres-id"), any());
     }
 
     @Test
     void scorePendingKeepsUnknownWhenResumeDetailEmpty() {
         createNormalAccount();
-        Candidate c = candidate("{\"name\":\"张三\",\"talentId\":\"res-1\"}");
+        Candidate c = candidate("{\"name\":\"张三\",\"resume_id\":\"res-1\"}");
         when(commandService.resume(any(), eq("res-1"), any())).thenReturn(Optional.empty());
 
         scoringEngine.scorePending(jd.getId());
@@ -207,8 +214,8 @@ class ScoringEnginePendingTest {
         createNormalAccount();
         when(aiClient.chat(anyString(), anyString()))
                 .thenReturn("{\"score\":80,\"pass\":true,\"summary\":\"ok\",\"reasons\":[\"a\"]}");
-        Candidate a = candidate("{\"name\":\"甲\",\"talentId\":\"res-a\"}");
-        Candidate b = candidate("{\"name\":\"乙\",\"talentId\":\"res-b\"}");
+        Candidate a = candidate("{\"name\":\"甲\",\"resume_id\":\"res-a\"}");
+        Candidate b = candidate("{\"name\":\"乙\",\"resume_id\":\"res-b\"}");
         when(commandService.resume(any(), eq("res-a"), any()))
                 .thenThrow(new CliException(CliException.Type.FAILED, "详情读取失败"));
         when(commandService.resume(any(), eq("res-b"), any())).thenReturn(Optional.of(
@@ -219,6 +226,37 @@ class ScoringEnginePendingTest {
         assertEquals(2, scored, "详情失败不得中断整批(仍写出待确认记录)");
         assertEquals("PENDING", candidateMapper.selectById(a.getId()).getPassStatus(), "详情失败保持待确认");
         assertEquals("PASS", candidateMapper.selectById(b.getId()).getPassStatus());
+    }
+
+    /** snapshot 无 resume_id → 回退 candidate.resume_id 主列读详情。 */
+    @Test
+    void scorePendingUsesStoredResumeIdWhenSnapshotHasNoResumeId() throws Exception {
+        createNormalAccount();
+        when(aiClient.chat(anyString(), anyString()))
+                .thenReturn("{\"score\":75,\"pass\":true,\"summary\":\"ok\",\"reasons\":[\"a\"]}");
+        Candidate c = candidate("{\"name\":\"张三\",\"talentId\":\"talent-enres-id\"}", "stored-res-id");
+        when(commandService.resume(any(), eq("stored-res-id"), any())).thenReturn(Optional.of(
+                objectMapper.readTree("{\"want_title\":\"软件工程师\"}")));
+
+        int scored = scoringEngine.scorePending(jd.getId());
+
+        assertEquals(1, scored);
+        assertEquals("PASS", candidateMapper.selectById(c.getId()).getPassStatus());
+        verify(commandService).resume(any(), eq("stored-res-id"), any());
+    }
+
+    /** snapshot 与主列均无有效简历标识 → 跳过详情读取(enresId/talentId 不作为详情标识)。 */
+    @Test
+    void scorePendingSkipsResumeDetailWhenNoResumeIdAvailable() {
+        createNormalAccount();
+        Candidate c = candidate("{\"name\":\"张三\",\"talentId\":\"talent-enres-id\"}", "");
+
+        int scored = scoringEngine.scorePending(jd.getId());
+
+        assertEquals(1, scored, "无有效简历标识仍写待确认(不中断批量)");
+        assertEquals("PENDING", candidateMapper.selectById(c.getId()).getPassStatus());
+        verify(commandService, never()).resume(any(), any(), any());
+        verify(aiClient, never()).chat(anyString(), anyString());
     }
 
     // ---------- I3①:期望数据内容指纹变化后对「职能待确认」重评(不依赖 updated_at) ----------
@@ -232,7 +270,7 @@ class ScoringEnginePendingTest {
         createNormalAccount();
         // 首轮:详情读取返回空(等价读取失败/无期望)→ UNKNOWN,记录携带「空期望」指纹
         when(commandService.resume(any(), eq("res-1"), any())).thenReturn(Optional.empty());
-        Candidate c = candidate("{\"name\":\"张三\",\"salary\":\"20-30K\",\"talentId\":\"res-1\"}");
+        Candidate c = candidate("{\"name\":\"张三\",\"salary\":\"20-30K\",\"resume_id\":\"res-1\"}");
 
         assertEquals(1, scoringEngine.scorePending(jd.getId()), "首轮应写入待确认记录");
         assertEquals("PENDING", candidateMapper.selectById(c.getId()).getPassStatus());
@@ -241,7 +279,7 @@ class ScoringEnginePendingTest {
 
         // 模拟 enrich 成功写回:仅通过真实更新路径补齐快照期望字段(不触碰 updated_at)
         Candidate loaded = candidateMapper.selectById(c.getId());
-        loaded.setSnapshot("{\"name\":\"张三\",\"salary\":\"20-30K\",\"talentId\":\"res-1\","
+        loaded.setSnapshot("{\"name\":\"张三\",\"salary\":\"20-30K\",\"resume_id\":\"res-1\","
                 + "\"want_title\":\"软件工程师\"}");
         candidateMapper.updateById(loaded);
 
@@ -258,7 +296,7 @@ class ScoringEnginePendingTest {
     void scorePendingSkipsPendingConclusionWhenFingerprintUnchanged() {
         createNormalAccount();
         when(commandService.resume(any(), eq("res-1"), any())).thenReturn(Optional.empty());
-        candidate("{\"name\":\"张三\",\"talentId\":\"res-1\"}");
+        candidate("{\"name\":\"张三\",\"resume_id\":\"res-1\"}");
 
         scoringEngine.scorePending(jd.getId());           // 首轮:写待确认记录
         int second = scoringEngine.scorePending(jd.getId()); // 次轮:期望指纹未变 → 跳过
@@ -274,7 +312,7 @@ class ScoringEnginePendingTest {
     void scorePendingKeepsPendingWhenDetailStillMissing() {
         createNormalAccount();
         when(commandService.resume(any(), eq("res-1"), any())).thenReturn(Optional.empty());
-        Candidate c = candidate("{\"name\":\"张三\",\"talentId\":\"res-1\"}");
+        Candidate c = candidate("{\"name\":\"张三\",\"resume_id\":\"res-1\"}");
 
         scoringEngine.scorePending(jd.getId());
         scoringEngine.scorePending(jd.getId());
@@ -282,7 +320,7 @@ class ScoringEnginePendingTest {
         Candidate after = candidateMapper.selectById(c.getId());
         assertEquals("PENDING", after.getPassStatus());
         assertNotEquals("PASS", after.getPassStatus());
-        assertTrue(after.getSnapshot().contains("talentId"), "快照保持原样(未猜期望)");
+        assertTrue(after.getSnapshot().contains("resume_id"), "快照保持原样(未猜期望)");
         verify(aiClient, never()).chat(anyString(), anyString());
         ScoreRecord record = scoreRecordMapper.selectOne(new LambdaQueryWrapper<>());
         assertTrue(record.getReason().contains("职能待确认"), "记录仍标记职能待确认");
@@ -314,8 +352,8 @@ class ScoringEnginePendingTest {
         createNormalAccount();
         when(aiClient.chat(anyString(), anyString()))
                 .thenReturn("{\"score\":80,\"pass\":true,\"summary\":\"ok\",\"reasons\":[\"a\"]}");
-        Candidate earlier = candidate("{\"name\":\"甲\",\"want_title\":\"软件工程师\",\"talentId\":\"res-a\"}");
-        candidate("{\"name\":\"乙\",\"talentId\":\"res-b\"}");
+        Candidate earlier = candidate("{\"name\":\"甲\",\"want_title\":\"软件工程师\",\"resume_id\":\"res-a\"}");
+        candidate("{\"name\":\"乙\",\"resume_id\":\"res-b\"}");
         when(commandService.resume(any(), eq("res-b"), any()))
                 .thenThrow(new CliException(CliException.Type.RISK_CONTROL, "安全验证"));
 
