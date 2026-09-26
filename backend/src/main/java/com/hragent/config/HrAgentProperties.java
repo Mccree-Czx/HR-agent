@@ -123,8 +123,8 @@ public class HrAgentProperties {
         /** 自动招聘闭环总开关(默认关闭,需启动参数显式开启) */
         private boolean enabled = false;
 
-        /** 单轮单岗位打招呼上限(取消日配额后的工作量边界,可配置) */
-        private int greetBatchLimit = 5;
+        /** 单轮单岗位打招呼上限(取消小批量保护,近似放开:符合即打招呼;真实处理量由详情读取与推荐入口决定,可配置) */
+        private int greetBatchLimit = 50;
 
         /** 单轮「在线简历详情」读取上限(只读平台调用,与推荐批次同量级,默认 20) */
         private int resumeDetailBatchLimit = 20;

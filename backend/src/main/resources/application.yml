@@ -41,8 +41,8 @@ hr-agent:
   auto-recruit:
     # 自动招聘闭环总开关(默认关闭,启动时用 AUTO_RECRUIT_ENABLED=true 显式开启)
     enabled: ${AUTO_RECRUIT_ENABLED:false}
-    # 单轮单岗位打招呼上限(取消日配额后的工作量边界)
-    greet-batch-limit: ${AUTO_RECRUIT_GREET_BATCH_LIMIT:5}
+    # 单轮单岗位打招呼上限(取消小批量保护,近似放开:符合即打招呼;可用 env 调整)
+    greet-batch-limit: ${AUTO_RECRUIT_GREET_BATCH_LIMIT:50}
     # 单轮「在线简历详情」读取上限(只读平台调用,与推荐批次同量级)
     resume-detail-batch-limit: ${AUTO_RECRUIT_RESUME_DETAIL_BATCH_LIMIT:20}
     # 相邻两次简历详情读取的最小间隔(毫秒,读操作轻节流)
