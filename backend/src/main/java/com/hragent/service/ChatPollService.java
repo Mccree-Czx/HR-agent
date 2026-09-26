@@ -53,7 +53,7 @@ import java.util.Optional;
  *
  * <p>容错:单会话失败不中断其余会话;风控({@link CliException.Type#RISK_CONTROL})与登录失效
  * ({@link CliException.Type#NOT_LOGGED_IN})立即中断本轮并上抛,交由既有熔断链路处理。
- * 外发动作(附件下载、索要简历)之间沿用 {@code greetIntervalSeconds} 节流。
+ * 外发动作(附件下载、索要简历)与打招呼统一由 {@link AccountPaceGuard} 按账号维度节流(评审 I-2)。
  */
 @Slf4j
 @Service
@@ -65,6 +65,10 @@ public class ChatPollService {
     private static final String RESUME_ID_FIELD = "enresId";
     /** 消息中关联岗位的候选字段(按序取首个非空) */
     private static final List<String> JOB_ID_FIELDS = List.of("ejobId", "jobId", "ejob_id");
+    /** chatmsg 发送方标识:对方发来(我方=「我」;无法判定=「未知」,不猜) */
+    private static final String SENDER_OTHER = "对方";
+    /** 陌生来话占位 resume_id 前缀(明确占位,不冒充真实简历 ID) */
+    private static final String PLACEHOLDER_RESUME_ID_PREFIX = "im:";
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
@@ -77,12 +81,13 @@ public class ChatPollService {
     private final JdMapper jdMapper;
     private final LiepinAccountMapper accountMapper;
     private final HrAgentProperties properties;
+    private final AccountPaceGuard paceGuard;
 
     public ChatPollService(LiepinCommandService commandService, ResumeCollectService resumeCollectService,
                            ScoringEngine scoringEngine, CandidateMapper candidateMapper,
                            GreetingRecordMapper greetingMapper, ResumeFileMapper resumeFileMapper,
                            JdMapper jdMapper, LiepinAccountMapper accountMapper,
-                           HrAgentProperties properties) {
+                           HrAgentProperties properties, AccountPaceGuard paceGuard) {
         this.commandService = commandService;
         this.resumeCollectService = resumeCollectService;
         this.scoringEngine = scoringEngine;
@@ -92,6 +97,7 @@ public class ChatPollService {
         this.jdMapper = jdMapper;
         this.accountMapper = accountMapper;
         this.properties = properties;
+        this.paceGuard = paceGuard;
     }
 
     /**
@@ -128,10 +134,9 @@ public class ChatPollService {
             return 0;
         }
         int processed = 0;
-        long[] lastOpAt = {0L};
         for (JsonNode session : sessions) {
             try {
-                if (handleSession(account, session, timeout, lastOpAt)) {
+                if (handleSession(account, session, timeout)) {
                     processed++;
                 }
             } catch (CliException e) {
@@ -150,7 +155,7 @@ public class ChatPollService {
     }
 
     /** 处理单个会话;返回是否已产生落库/外发动作 */
-    private boolean handleSession(LiepinAccount account, JsonNode session, Duration timeout, long[] lastOpAt) {
+    private boolean handleSession(LiepinAccount account, JsonNode session, Duration timeout) {
         String imId = session.path("im_id").asText("").trim();
         if (imId.isEmpty()) {
             log.warn("会话缺少 im_id,跳过(不猜测)");
@@ -159,14 +164,14 @@ public class ChatPollService {
         String direction = session.path("direction").asText("");
         Candidate candidate = findCandidateByImId(imId);
         if (candidate != null) {
-            return handleKnownCandidate(account, candidate, imId, direction, timeout, lastOpAt);
+            return handleKnownCandidate(account, candidate, imId, direction, timeout);
         }
-        return handleStranger(account, session, imId, direction, timeout, lastOpAt);
+        return handleStranger(account, session, imId, direction, timeout);
     }
 
     /** 已知候选人:附件优先入库(不看分数);否则文本回复按门槛+评分索要 */
     private boolean handleKnownCandidate(LiepinAccount account, Candidate candidate, String imId,
-                                         String direction, Duration timeout, long[] lastOpAt) {
+                                         String direction, Duration timeout) {
         // 仅处理「候选人最后发言」的会话,避免无谓拉消息
         if (!"1".equals(direction)) {
             return false;
@@ -178,14 +183,14 @@ public class ChatPollService {
         List<JsonNode> messages = commandService.chatmsg(account, imId, timeout);
         JsonNode attachment = findLatestAttachment(messages);
         if (attachment != null) {
-            return downloadAndStore(account, candidate, imId, attachment, timeout, lastOpAt);
+            return downloadAndStore(account, candidate, imId, attachment, timeout);
         }
-        return requestResumeForKnown(account, candidate, timeout, lastOpAt);
+        return requestResumeForKnown(account, candidate, timeout);
     }
 
     /** 附件下载 → 校验 → 入库;任一步失败都只记日志、不写半状态(下轮重试) */
     private boolean downloadAndStore(LiepinAccount account, Candidate candidate, String imId,
-                                     JsonNode attachment, Duration timeout, long[] lastOpAt) {
+                                     JsonNode attachment, Duration timeout) {
         if (hasResumeFile(candidate.getId())) {
             return false;
         }
@@ -193,7 +198,7 @@ public class ChatPollService {
         if (fileName.isEmpty()) {
             fileName = "resume.pdf";
         }
-        enforceOpPace(lastOpAt);
+        paceGuard.await(account);
         Optional<JsonNode> result = commandService.attachDownload(account, imId, attachWorkDir(), timeout);
         JsonNode node = result.orElse(null);
         if (node == null || !node.path("success").asBoolean(false)) {
@@ -219,14 +224,14 @@ public class ChatPollService {
             return false;
         }
         deleteQuietly(filePath);
+        paceGuard.mark(account);
         log.info("候选人 {} 附件已校验入库({} 字节, sha256={})",
                 candidate.getId(), content.length, node.path("sha256").asText(""));
         return true;
     }
 
     /** 已知候选人仅文本回复:门槛已确认 + 评分 PASS + 未 REQUESTED → 复用既有索要路径 */
-    private boolean requestResumeForKnown(LiepinAccount account, Candidate candidate,
-                                          Duration timeout, long[] lastOpAt) {
+    private boolean requestResumeForKnown(LiepinAccount account, Candidate candidate, Duration timeout) {
         if (!"PASS".equals(candidate.getPassStatus())) {
             log.debug("候选人 {} 非 PASS({}),不索要", candidate.getId(), candidate.getPassStatus());
             return false;
@@ -246,15 +251,22 @@ public class ChatPollService {
             log.warn("岗位未确认门槛,跳过索要简历(候选人 {})", candidate.getId());
             return false;
         }
-        enforceOpPace(lastOpAt);
+        paceGuard.await(account);
         // 复用既有索要路径:内含门槛门禁 + resume_id 校验 + 回复复核 + 状态回写
         resumeCollectService.collectOne(record, candidate);
-        return "REQUESTED".equals(record.getStatus());
+        boolean requested = "REQUESTED".equals(record.getStatus());
+        if (requested) {
+            paceGuard.mark(account);
+        }
+        return requested;
     }
 
-    /** 陌生来话:提取在线简历标识;成功建候选人(可关联岗位则走评分门禁);失败只记日志 */
+    /**
+     * 陌生来话:提取在线简历标识;成功建候选人(可关联岗位则走评分门禁);
+     * 提取失败但检测到对方附件卡片 → 以占位载体入库并标记待分配(评审 I-3);两者皆无 → 只记日志。
+     */
     private boolean handleStranger(LiepinAccount account, JsonNode session, String imId,
-                                   String direction, Duration timeout, long[] lastOpAt) {
+                                   String direction, Duration timeout) {
         if (!"1".equals(direction)) {
             return false;
         }
@@ -262,8 +274,8 @@ public class ChatPollService {
         JsonNode card = findLatestResumeCard(messages);
         String resumeId = card == null ? null : findText(card, RESUME_ID_FIELD);
         if (resumeId == null || resumeId.isBlank()) {
-            log.warn("陌生来话({})未能从消息提取简历标识,不建/不猜,留待人工分配", imId);
-            return false;
+            // 无身份标识:若对方发来附件卡片则以占位载体入库待分配,否则不建/不猜
+            return storeStrangerAttachment(account, session, imId, messages, timeout);
         }
         String sessionName = session.path("name").asText("").trim();
         Long jdId = resolveJdId(card);
@@ -282,13 +294,51 @@ public class ChatPollService {
         }
         // 有关联岗位 → 走评分门禁(期望职能三态 + 门槛);无快照期望证据时恒 UNKNOWN→PENDING,绝不外发
         scoringEngine.scoreAndSave(candidate.getId());
-        maybeRequestAfterStrangerScore(account, candidate.getId(), timeout, lastOpAt);
+        maybeRequestAfterStrangerScore(account, candidate.getId(), timeout);
         return true;
     }
 
+    /**
+     * 陌生来话无法提取身份标识时的兜底(评审 I-3):若对方发来附件卡片,则以占位载体入库并标记待分配。
+     * 占位 {@code resume_id} 为 {@code im:<imId>}(明确占位前缀,不冒充真实简历 ID);仅入库附件,
+     * 不评分、不索要;同一 im 已有候选人(预查 resume_id)则复用其 id,不重复建(规避 uk_resume 冲突)。
+     */
+    private boolean storeStrangerAttachment(LiepinAccount account, JsonNode session, String imId,
+                                            List<JsonNode> messages, Duration timeout) {
+        JsonNode attachment = findLatestAttachment(messages);
+        if (attachment == null) {
+            log.warn("陌生来话({})未能从消息提取简历标识且无对方附件卡片,不建/不猜,留待人工分配", imId);
+            return false;
+        }
+        String placeholderResumeId = PLACEHOLDER_RESUME_ID_PREFIX + imId;
+        Candidate candidate = findCandidateByResumeId(placeholderResumeId);
+        if (candidate == null) {
+            candidate = createPlaceholderCandidate(session, imId, placeholderResumeId);
+        }
+        if (hasResumeFile(candidate.getId())) {
+            return false;
+        }
+        return downloadAndStore(account, candidate, imId, attachment, timeout);
+    }
+
+    /** 建陌生来话占位候选人:名称取 chatlist 显示名,取不到则「待分配-<imId前8位>」;jd_id=null、PENDING */
+    private Candidate createPlaceholderCandidate(JsonNode session, String imId, String placeholderResumeId) {
+        String sessionName = session.path("name").asText("").trim();
+        String name = sessionName.isEmpty() ? "待分配-" + imIdPrefix(imId) : sessionName;
+        Candidate candidate = new Candidate();
+        candidate.setResumeId(placeholderResumeId);
+        candidate.setName(name);
+        candidate.setSnapshot(buildStrangerSnapshot(imId, sessionName, null));
+        candidate.setJdId(null);
+        candidate.setPassStatus("PENDING");
+        candidateMapper.insert(candidate);
+        log.info("陌生来话 {} 无身份标识但有附件,已建占位候选人(id={}, resume_id={}),标记待分配,不评分不索要",
+                imId, candidate.getId(), placeholderResumeId);
+        return candidate;
+    }
+
     /** 陌生来话评分后:仅 PASS 且门槛已确认才索要(否则保持待处理) */
-    private void maybeRequestAfterStrangerScore(LiepinAccount account, Long candidateId,
-                                               Duration timeout, long[] lastOpAt) {
+    private void maybeRequestAfterStrangerScore(LiepinAccount account, Long candidateId, Duration timeout) {
         Candidate fresh = candidateMapper.selectById(candidateId);
         if (fresh == null || !"PASS".equals(fresh.getPassStatus())) {
             return;
@@ -301,11 +351,12 @@ public class ChatPollService {
         if (resumeId == null || resumeId.isBlank()) {
             return;
         }
-        enforceOpPace(lastOpAt);
+        paceGuard.await(account);
         Optional<JsonNode> result = commandService.requestResume(account, resumeId, timeout);
         boolean confirmed = result.filter(node -> node.path("success").asBoolean(false)
                 && node.path("confirmed").asBoolean(false)).isPresent();
         if (confirmed) {
+            paceGuard.mark(account);
             log.info("陌生来话候选人 {} 评分通过,已索要简历", candidateId);
         } else {
             log.warn("陌生来话候选人 {} 索要未获确认", candidateId);
@@ -324,6 +375,13 @@ public class ChatPollService {
             }
         }
         return null;
+    }
+
+    /** 以 resume_id 精确匹配候选人(陌生来话占位载体预查,规避 uk_resume 冲突) */
+    private Candidate findCandidateByResumeId(String resumeId) {
+        return candidateMapper.selectOne(new LambdaQueryWrapper<Candidate>()
+                .eq(Candidate::getResumeId, resumeId)
+                .last("LIMIT 1"));
     }
 
     private boolean hasResumeFile(Long candidateId) {
@@ -360,10 +418,18 @@ public class ChatPollService {
         return null;
     }
 
-    /** 最新一条含附件卡片的消息的 body(type=file 或含 fileId) */
+    /**
+     * 最新一条「对方」发出且含附件卡片的消息 body(type=file 或含 fileId)。
+     * 仅扫描 sender=对方 的消息(评审 I-1):我方发出的附件不算候选人简历;
+     * sender 为空/「未知」同样不得作为附件来源(不猜)。
+     */
     private static JsonNode findLatestAttachment(List<JsonNode> messages) {
         for (int i = messages.size() - 1; i >= 0; i--) {
-            JsonNode bodies = messages.get(i).path("payload").path("bodies");
+            JsonNode message = messages.get(i);
+            if (!SENDER_OTHER.equals(message.path("sender").asText(""))) {
+                continue;
+            }
+            JsonNode bodies = message.path("payload").path("bodies");
             if (!bodies.isArray()) {
                 continue;
             }
@@ -448,24 +514,9 @@ public class ChatPollService {
         return Paths.get(ATTACH_WORK_DIR).toAbsolutePath().normalize().toString();
     }
 
-    /** 外发动作节流:同一轮内附件下载与索要之间保持 greetIntervalSeconds 间隔 */
-    private void enforceOpPace(long[] lastOpAt) {
-        int intervalSeconds = properties.getScoring().getGreetIntervalSeconds();
-        if (intervalSeconds <= 0) {
-            lastOpAt[0] = System.currentTimeMillis();
-            return;
-        }
-        if (lastOpAt[0] > 0) {
-            long waitMillis = intervalSeconds * 1000L - (System.currentTimeMillis() - lastOpAt[0]);
-            if (waitMillis > 0) {
-                try {
-                    Thread.sleep(waitMillis);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-            }
-        }
-        lastOpAt[0] = System.currentTimeMillis();
+    /** imId 前 8 位(占位候选人名称兜底用) */
+    private static String imIdPrefix(String imId) {
+        return imId.length() <= 8 ? imId : imId.substring(0, 8);
     }
 
     private static void deleteQuietly(String filePath) {

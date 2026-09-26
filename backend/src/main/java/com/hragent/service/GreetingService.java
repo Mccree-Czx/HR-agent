@@ -21,7 +21,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.time.LocalDateTime;
+import java.time.Instant;
+import java.time.ZoneId;
 import java.util.List;
 
 /**
@@ -44,11 +45,13 @@ public class GreetingService {
     private final AiClient aiClient;
     private final HrAgentProperties properties;
     private final ResourceLoader resourceLoader;
+    private final AccountPaceGuard paceGuard;
 
     public GreetingService(GreetingRecordMapper greetingMapper, CandidateMapper candidateMapper,
                            LiepinAccountMapper accountMapper, JdMapper jdMapper,
                            LiepinCommandService commandService,
-                           AiClient aiClient, HrAgentProperties properties, ResourceLoader resourceLoader) {
+                           AiClient aiClient, HrAgentProperties properties, ResourceLoader resourceLoader,
+                           AccountPaceGuard paceGuard) {
         this.greetingMapper = greetingMapper;
         this.candidateMapper = candidateMapper;
         this.accountMapper = accountMapper;
@@ -57,6 +60,7 @@ public class GreetingService {
         this.aiClient = aiClient;
         this.properties = properties;
         this.resourceLoader = resourceLoader;
+        this.paceGuard = paceGuard;
     }
 
     /**
@@ -135,9 +139,12 @@ public class GreetingService {
 
         // 6. 自动模式:节奏控制 + 发送;失败(如候选人设隐私保护)记录后继续下一人
         try {
-            enforcePace(account);
+            // 账号级节流(评审 I-2):与来信轮询共用 AccountPaceGuard;
+            // 冷启动(进程重启后无内存记录)时从 greeting_record 最近一次 SENT 补种
+            paceGuard.await(account, () -> lastSentInstant(account.getId()));
             commandService.greet(account, candidate.getResumeId(), ejobId, message,
                     Duration.ofMinutes(properties.getLiepin().getShortTimeoutMinutes()));
+            paceGuard.mark(account);
             insertRecord(account, candidate, ejobId, message, "SENT");
             log.info("候选人 {} 打招呼已发送(账号 {}, 职位 {})", candidate.getId(), account.getId(), ejobId);
             return true;
@@ -202,25 +209,20 @@ public class GreetingService {
         return "您好,看到您的背景与我们岗位较为匹配,方便进一步沟通吗?";
     }
 
-    /** 节奏控制:距该账号上次发送不足间隔时等待(评审 P0-3) */
-    private void enforcePace(LiepinAccount account) {
+    /**
+     * 冷启动兜底:查该账号最近一次 SENT 打招呼时刻,供 {@link AccountPaceGuard} 在无内存记录时补种。
+     * 返回 {@code null} 表示确无历史外发。
+     */
+    private Instant lastSentInstant(Long accountId) {
         GreetingRecord last = greetingMapper.selectOne(new LambdaQueryWrapper<GreetingRecord>()
-                .eq(GreetingRecord::getAccountId, account.getId())
+                .eq(GreetingRecord::getAccountId, accountId)
                 .eq(GreetingRecord::getStatus, "SENT")
                 .orderByDesc(GreetingRecord::getCreatedAt)
                 .last("LIMIT 1"));
         if (last == null || last.getCreatedAt() == null) {
-            return;
+            return null;
         }
-        long interval = properties.getScoring().getGreetIntervalSeconds();
-        long elapsed = Duration.between(last.getCreatedAt(), LocalDateTime.now()).toSeconds();
-        if (elapsed < interval) {
-            try {
-                Thread.sleep((interval - elapsed) * 1000L);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        }
+        return last.getCreatedAt().atZone(ZoneId.systemDefault()).toInstant();
     }
 
     private String loadPrompt() {
