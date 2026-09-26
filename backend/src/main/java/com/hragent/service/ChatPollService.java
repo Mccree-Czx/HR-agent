@@ -101,19 +101,20 @@ public class ChatPollService {
     }
 
     /**
-     * 轮询来信与附件(每轮总入口,内部单账号串行)。
+     * 轮询来信与附件(每轮总入口,内部单账号串行);返回本轮产生动作(附件入库/索要/建候选人)的会话数。
      */
-    public void poll() {
+    public int poll() {
         LiepinAccount account = accountMapper.selectOne(new LambdaQueryWrapper<LiepinAccount>()
                 .eq(LiepinAccount::getLoginStatus, "NORMAL")
                 .orderByAsc(LiepinAccount::getId)
                 .last("LIMIT 1"));
         if (account == null) {
             log.warn("来信轮询:无可用猎聘账号(login_status=NORMAL),本轮跳过");
-            return;
+            return 0;
         }
         int processed = pollOnce(account);
         log.info("来信轮询完成:账号 {},处理 {} 个会话", account.getId(), processed);
+        return processed;
     }
 
     /**

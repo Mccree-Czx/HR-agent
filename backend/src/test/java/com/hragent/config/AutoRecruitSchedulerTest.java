@@ -1,14 +1,18 @@
 package com.hragent.config;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.hragent.common.BizException;
 import com.hragent.entity.Jd;
 import com.hragent.entity.LiepinAccount;
 import com.hragent.entity.SearchTask;
 import com.hragent.executor.CliException;
+import com.hragent.repository.AppSettingMapper;
 import com.hragent.repository.JdMapper;
 import com.hragent.repository.LiepinAccountMapper;
 import com.hragent.repository.SearchTaskMapper;
 import com.hragent.scoring.ScoringEngine;
+import com.hragent.service.AutoRecruitSettingService;
 import com.hragent.service.ChatPollService;
 import com.hragent.service.GreetingService;
 import com.hragent.service.SearchTaskService;
@@ -23,23 +27,28 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * AutoRecruitScheduler 单轮编排测试(全部 mock 服务,真实 mapper/H2)。
- * 开启开关:通过 @SpringBootTest properties 使 @ConditionalOnProperty 生效并创建调度器 bean,
- * 再在用例内运行时切换 properties.autoRecruit.enabled 验证关闭分支。
+ * 运行时开关语义(2026-09-26):OFF 只停主动外发——轮次照常(检测/评分/拉推荐),
+ * 仅跳过打招呼;互斥:定时重叠跳过、手动拒绝;每轮写摘要。
  */
-@SpringBootTest(properties = "hr-agent.auto-recruit.enabled=true")
+@SpringBootTest
 @ActiveProfiles("test")
 @Transactional
 class AutoRecruitSchedulerTest {
@@ -58,6 +67,12 @@ class AutoRecruitSchedulerTest {
 
     @Autowired
     private SearchTaskMapper searchTaskMapper;
+
+    @Autowired
+    private AppSettingMapper settingMapper;
+
+    @Autowired
+    private AutoRecruitSettingService settingService;
 
     @MockitoBean
     private SearchTaskService searchTaskService;
@@ -81,7 +96,8 @@ class AutoRecruitSchedulerTest {
         searchTaskMapper.delete(new LambdaQueryWrapper<>());
         jdMapper.delete(new LambdaQueryWrapper<>());
         accountMapper.delete(new LambdaQueryWrapper<>());
-        properties.getAutoRecruit().setEnabled(true);
+        settingMapper.delete(new LambdaQueryWrapper<>());
+        properties.getAutoRecruit().setEnabled(true); // 种子默认开启(库清空后由 isEnabled() 落库)
         properties.getAutoRecruit().setGreetBatchLimit(5);
         accountId = null;
     }
@@ -116,7 +132,7 @@ class AutoRecruitSchedulerTest {
         searchTaskMapper.insert(task);
     }
 
-    // ---------- isRunWindow 边界 ----------
+    // ---------- isRunWindow / nextRunAt 边界 ----------
 
     @Test
     void isRunWindowBoundaries() {
@@ -132,18 +148,22 @@ class AutoRecruitSchedulerTest {
         assertFalse(AutoRecruitScheduler.isRunWindow(null), "null应为false");
     }
 
-    // ---------- 开关 / 时段 / 账务门禁 ----------
-
     @Test
-    void disabledDoesNothing() {
-        properties.getAutoRecruit().setEnabled(false);
-        scheduler.runRound(WORK_TIME);
-
-        verify(chatPollService, never()).poll();
-        verify(scoringEngine, never()).scorePending(anyLong());
-        verify(greetingService, never()).greetPassed(anyLong(), anyInt());
-        verify(searchTaskService, never()).createRecommendTask(anyLong(), anyLong());
+    void nextRunAtBoundaries() {
+        assertEquals(LocalDateTime.of(2026, 9, 26, 9, 0),
+                AutoRecruitScheduler.nextRunAt(LocalDateTime.of(2026, 9, 26, 8, 59)), "8:59→当日9:00");
+        assertEquals(LocalDateTime.of(2026, 9, 26, 10, 0),
+                AutoRecruitScheduler.nextRunAt(LocalDateTime.of(2026, 9, 26, 9, 0)), "9:00→10:00(严格晚于)");
+        assertEquals(LocalDateTime.of(2026, 9, 26, 18, 0),
+                AutoRecruitScheduler.nextRunAt(LocalDateTime.of(2026, 9, 26, 17, 30)), "17:30→18:00");
+        assertEquals(LocalDateTime.of(2026, 9, 27, 9, 0),
+                AutoRecruitScheduler.nextRunAt(LocalDateTime.of(2026, 9, 26, 18, 0)), "18:00→次日9:00");
+        assertEquals(LocalDateTime.of(2026, 9, 27, 9, 0),
+                AutoRecruitScheduler.nextRunAt(LocalDateTime.of(2026, 9, 26, 23, 30)), "23:30→次日9:00");
+        assertNull(AutoRecruitScheduler.nextRunAt(null), "null→null");
     }
+
+    // ---------- 时段 / 账号门禁 ----------
 
     @Test
     void outsideRunWindowDoesNothing() {
@@ -165,9 +185,71 @@ class AutoRecruitSchedulerTest {
 
         verify(chatPollService, never()).poll();
         verify(searchTaskService, never()).createRecommendTask(anyLong(), anyLong());
+        JsonNode lastRun = settingService.lastRun().orElseThrow();
+        assertTrue(lastRun.path("noAccount").asBoolean(), "无账号轮次摘要应标记 noAccount");
+        verify(chatPollService, never()).poll();
     }
 
-    // ---------- 防重叠 ----------
+    // ---------- 运行时开关:OFF = 只收不联 ----------
+
+    @Test
+    void switchOffRunsCollectOnlyMode() {
+        settingService.setEnabled(false);
+        createAccount();
+        Jd jd = createActiveJd("123");
+
+        scheduler.runRound(WORK_TIME);
+
+        // 只收:检测/评分/拉推荐照常
+        verify(chatPollService).poll();
+        verify(scoringEngine).scorePending(jd.getId());
+        verify(searchTaskService).createRecommendTask(jd.getId(), accountId);
+        // 不联:打招呼绝不发生
+        verify(greetingService, never()).greetPassed(anyLong(), anyInt());
+        // 摘要体现只收模式
+        JsonNode lastRun = settingService.lastRun().orElseThrow();
+        assertEquals("collectOnly", lastRun.path("mode").asText());
+        assertEquals(0, lastRun.path("greeted").asInt());
+    }
+
+    @Test
+    void switchOnRunsFullMode() {
+        // 默认种子开启(见 setUp)
+        createAccount();
+        Jd jd = createActiveJd("123");
+
+        scheduler.runRound(WORK_TIME);
+
+        verify(greetingService).greetPassed(jd.getId(), 5);
+        assertEquals("full", settingService.lastRun().orElseThrow().path("mode").asText());
+    }
+
+    // ---------- 轮次互斥 ----------
+
+    @Test
+    void hourlySkipsWhenRoundAlreadyRunning() {
+        createAccount();
+        Jd jd1 = createActiveJd("111");
+        Jd jd2 = createActiveJd("222");
+        // 第一岗评分时嵌套触发一轮(模拟整点重叠)→ 应被互斥挡下
+        doAnswer(invocation -> {
+            scheduler.runRound(WORK_TIME);
+            return 0;
+        }).when(scoringEngine).scorePending(jd1.getId());
+        // 第二岗评分时嵌套手动触发 → 应抛出"运行中"拒绝
+        doAnswer(invocation -> {
+            assertThrows(BizException.class, () -> scheduler.runRoundInternal());
+            return 0;
+        }).when(scoringEngine).scorePending(jd2.getId());
+
+        scheduler.runRound(WORK_TIME);
+
+        verify(chatPollService, times(1)).poll(); // 嵌套轮次未执行
+        assertFalse(scheduler.isRunning(), "轮次结束后互斥标志应释放");
+        assertNull(scheduler.getRunningSince(), "轮次结束后 runningSince 应为 null");
+    }
+
+    // ---------- 防重叠(岗位任务) ----------
 
     @Test
     void skipCreateWhenTaskInFlight() {
@@ -225,6 +307,8 @@ class AutoRecruitSchedulerTest {
         verify(scoringEngine).scorePending(jd2.getId());
         verify(searchTaskService, never()).createRecommendTask(eq(jd1.getId()), anyLong());
         verify(searchTaskService).createRecommendTask(jd2.getId(), accountId);
+        assertEquals(1, settingService.lastRun().orElseThrow().path("errors").asInt(),
+                "单岗位失败应计入摘要 errors");
     }
 
     @Test
@@ -235,6 +319,9 @@ class AutoRecruitSchedulerTest {
                 .when(scoringEngine).scorePending(jd.getId());
 
         assertThrows(CliException.class, () -> scheduler.runRound(WORK_TIME), "风控异常应上抛(不吞掉)");
+        JsonNode lastRun = settingService.lastRun().orElseThrow();
+        assertTrue(lastRun.path("riskStopped").asBoolean(), "风控停止应写入摘要");
+        assertFalse(scheduler.isRunning(), "异常后互斥标志应释放");
     }
 
     // ---------- 配置生效 ----------
@@ -259,5 +346,28 @@ class AutoRecruitSchedulerTest {
 
         verify(scoringEngine, never()).scorePending(anyLong());
         verify(searchTaskService, never()).createRecommendTask(anyLong(), anyLong());
+    }
+
+    // ---------- 摘要计数 ----------
+
+    @Test
+    void summarySavesCountsAfterRound() {
+        createAccount();
+        Jd jd = createActiveJd("123");
+        when(chatPollService.poll()).thenReturn(7);
+        when(scoringEngine.scorePending(jd.getId())).thenReturn(2);
+        when(greetingService.greetPassed(jd.getId(), 5)).thenReturn(3);
+
+        scheduler.runRound(WORK_TIME);
+
+        JsonNode lastRun = settingService.lastRun().orElseThrow();
+        assertEquals("full", lastRun.path("mode").asText());
+        assertEquals(7, lastRun.path("polled").asInt());
+        assertEquals(2, lastRun.path("scored").asInt());
+        assertEquals(3, lastRun.path("greeted").asInt());
+        assertEquals(1, lastRun.path("recommended").asInt());
+        assertEquals(0, lastRun.path("errors").asInt());
+        assertFalse(lastRun.path("riskStopped").asBoolean());
+        assertFalse(lastRun.path("noAccount").asBoolean());
     }
 }

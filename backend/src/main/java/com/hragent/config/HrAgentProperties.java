@@ -120,7 +120,7 @@ public class HrAgentProperties {
     @Data
     public static class AutoRecruit {
 
-        /** 自动招聘闭环总开关(默认关闭,需启动参数显式开启) */
+        /** 自动外发开关的首次种子(仅当 app_setting 中无值时生效;之后完全由界面开关控制,见 AutoRecruitSettingService) */
         private boolean enabled = false;
 
         /** 单轮单岗位打招呼上限(取消小批量保护,近似放开:符合即打招呼;真实处理量由详情读取与推荐入口决定,可配置) */
