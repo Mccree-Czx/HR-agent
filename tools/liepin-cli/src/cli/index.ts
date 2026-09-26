@@ -21,6 +21,7 @@ import { joblistCommand } from '../toolset/joblist.js';
 import { jobpublishCommand } from '../toolset/jobpublish.js';
 import { jobdeleteCommand } from '../toolset/jobdelete.js';
 import { attachDownloadCommand } from '../toolset/attach-download.js';
+import { attachFetchCommand } from '../toolset/attach-fetch.js';
 import { skillCommand } from '../toolset/skill.js';
 import { quitCommand } from '../toolset/quit.js';
 import { acquireBusyLock, releaseBusyLock } from '../common/busy_lock.js';
@@ -68,6 +69,7 @@ const commands: Command[] = [
   jobpublishCommand,
   jobdeleteCommand,
   attachDownloadCommand,
+  attachFetchCommand,
   skillCommand,
   quitCommand,
 ];
