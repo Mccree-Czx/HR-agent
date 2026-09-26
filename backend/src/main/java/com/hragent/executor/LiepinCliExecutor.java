@@ -189,8 +189,4 @@ public class LiepinCliExecutor {
         long accountId = account.getId() == null ? 1L : account.getId();
         return accountId == 1L ? BASE_DEBUG_PORT : BASE_DEBUG_PORT + (int) (accountId % 1000);
     }
-
-    private String truncate(String s, int max) {
-        return s == null || s.length() <= max ? s : s.substring(0, max) + "...";
-    }
 }
