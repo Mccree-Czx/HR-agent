@@ -36,8 +36,13 @@
             <el-tag :type="row.candidate.passStatus === 'PASS' ? 'success' : 'danger'" size="small">
               {{ row.latestScore.score }} 分
             </el-tag>
-            <el-tooltip :content="row.latestScore.reason">
-              <span class="score-reason">{{ row.latestScore.reason }}</span>
+            <el-tooltip
+              v-if="row.latestScore.reason"
+              :content="row.latestScore.reason"
+              placement="top"
+              popper-class="reason-tooltip"
+            >
+              <span class="score-detail">详情</span>
             </el-tooltip>
           </template>
           <el-tag v-else type="info" size="small">待评分</el-tag>
@@ -200,14 +205,23 @@ onMounted(async () => {
   margin-top: 12px;
   justify-content: flex-end;
 }
-.score-reason {
+.score-detail {
   margin-left: 6px;
-  color: var(--hr-text-3);
   font-size: 12px;
+  color: var(--el-color-primary);
+  cursor: pointer;
 }
 .tab-hint {
   color: var(--hr-text-3);
   font-size: 12px;
   align-self: center;
+}
+</style>
+
+<style>
+/* tooltip 挂载在 body,需非 scoped 样式;限制超长评分理由的展示宽度 */
+.reason-tooltip {
+  max-width: 420px;
+  line-height: 1.6;
 }
 </style>
