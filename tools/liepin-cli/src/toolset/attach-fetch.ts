@@ -58,10 +58,13 @@ const GUID_PATTERN = /^[a-zA-Z0-9-]+$/;
 
 /**
  * 从 chat-list 消息列表中找最新的附件卡片消息,提取 attachmentSign(仅内存使用)。
+ * 仅扫描「对方」发送的消息(与轮询的附件发送方原则一致,不把我方卡片当候选人简历)。
  * 返回 null 表示确无附件(不是错误)。
  */
-export function findAttachmentSign(list: any[]): string | null {
+export function findAttachmentSign(list: any[], oppositeImId: string): string | null {
   for (const message of list) {
+    // 仅对方消息:我方发出的卡片(如平台回执)不得作为附件来源(不猜)
+    if (String(message?.msgSendImId ?? '') !== oppositeImId) continue;
     let payload = message?.payload;
     if (typeof payload === 'string') {
       try {
@@ -253,7 +256,7 @@ export async function attachFetch(page: Page, options: AttachFetchOptions): Prom
     throw new Error(`获取聊天消息失败(flag=${chatData.flag})`);
   }
   const list = Array.isArray(chatData.data?.list) ? chatData.data.list : [];
-  const attachmentSign = findAttachmentSign(list);
+  const attachmentSign = findAttachmentSign(list, imId);
   if (!attachmentSign) {
     return { found: false, success: false, reason: 'no-attachment' };
   }

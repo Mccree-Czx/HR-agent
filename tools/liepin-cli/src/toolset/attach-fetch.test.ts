@@ -21,10 +21,11 @@ const ATTACH_PATH = '/api/com.liepin.zhuque.resumeview.get-resume-attachment';
 const CHAT_LIST_PATH = '/api/com.liepin.im.b.chat.chat-list';
 
 /** 构造一条带附件卡片的候选人消息(payload 为 JSON 字符串,与真实接口一致) */
-function attachMessage(sign: string, paramOverride?: string) {
+function attachMessage(sign: string, paramOverride?: string, sender = 'opp-im') {
   const param = paramOverride ?? JSON.stringify({ attachmentSign: sign, encodeAttachmentId: 'enc-1' });
   return {
     msgId: 'm-card',
+    msgSendImId: sender,
     payload: JSON.stringify({
       ext: { extBody: { bizData: { bizType: '7', attachmentResume: { param } } } },
     }),
@@ -305,11 +306,18 @@ test('缺少 imId / out 直接报错(不触达页面)', async () => {
 test('findAttachmentSign:取最新一条 bizType=7 的签名;非 7/无 param 跳过', () => {
   const list = [
     attachMessage('newest-sign'),
-    { msgId: 'm-2', payload: JSON.stringify({ ext: { extBody: { bizData: { bizType: '1' } } } }) },
+    { msgId: 'm-2', msgSendImId: 'opp-im', payload: JSON.stringify({ ext: { extBody: { bizData: { bizType: '1' } } } }) },
     attachMessage('older-sign'),
   ];
-  assert.equal(findAttachmentSign(list), 'newest-sign');
-  assert.equal(findAttachmentSign([textMessage()]), null);
+  assert.equal(findAttachmentSign(list, 'opp-im'), 'newest-sign');
+  assert.equal(findAttachmentSign([textMessage()], 'opp-im'), null);
+});
+
+test('findAttachmentSign:只认对方消息;我方带卡片的消息忽略(不把我方卡片当候选人简历)', () => {
+  const mine = attachMessage('mine-sign', undefined, 'own-im');
+  const theirs = attachMessage('opp-sign', undefined, 'opp-im');
+  assert.equal(findAttachmentSign([mine], 'opp-im'), null);
+  assert.equal(findAttachmentSign([mine, theirs], 'opp-im'), 'opp-sign');
 });
 
 test('命令注册:attach-fetch 参数与默认值', () => {
