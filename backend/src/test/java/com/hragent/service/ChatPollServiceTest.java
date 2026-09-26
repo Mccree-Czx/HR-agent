@@ -37,6 +37,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -119,25 +120,22 @@ class ChatPollServiceTest {
         accountMapper.insert(account);
     }
 
-    // ---------- 附件:下载成功 → 校验入库(不看分数/门槛) ----------
+    // ---------- 附件:attach-fetch 获取成功 → 校验入库(不看分数/门槛) ----------
 
     @Test
-    void attachmentDownloadedAndStoredEvenWithoutScoreOrThreshold() throws Exception {
+    void attachmentFetchedAndStoredEvenWithoutScoreOrThreshold() throws Exception {
         // 来源岗位未确认门槛 + 候选人评分 FAIL:附件仍应入库(设计 3.2「不受分数限制」)
         Jd jd = unconfirmedJd("招聘主管", "88888");
         Candidate candidate = knownCandidate("im1", "张三");
         candidate.setJdId(jd.getId());
         candidate.setPassStatus("FAIL");
         candidateMapper.updateById(candidate);
-        greeting(candidate);
+        GreetingRecord record = greeting(candidate);
 
-        stubChatlist("{\"im_id\":\"im1\",\"name\":\"张三\",\"direction\":\"1\"}");
-        stubChatmsg("im1",
-                "{\"message_id\":\"m1\",\"sender\":\"对方\",\"opposite_im_id\":\"im1\","
-                        + "\"payload\":{\"bodies\":[{\"type\":\"file\",\"fileId\":\"f1\",\"filename\":\"简历.pdf\"}]}}");
-        Path pdf = writePdf("resume.pdf");
-        when(commandService.attachDownload(any(), eq("im1"), anyString(), any()))
-                .thenReturn(Optional.of(downloadResult(pdf)));
+        stubChatlist("{\"im_id\":\"im1\",\"name\":\"张三\",\"direction\":\"1\",\"raw_metadata\":{\"latestMsgId\":\"m-100\"}}");
+        Path pdf = writePdf("resume-fetched.pdf");
+        when(commandService.attachFetch(any(), eq("im1"), anyString(), any()))
+                .thenReturn(Optional.of(attachFetchResult(pdf, "硬件工程师0922.pdf")));
 
         int processed = chatPollService.pollOnce(account);
 
@@ -147,30 +145,74 @@ class ChatPollServiceTest {
         assertEquals(1, files.size(), "附件应入库");
         assertEquals("pdf", files.get(0).getFormat());
         assertEquals(PDF.length, files.get(0).getSize());
+        assertTrue(files.get(0).getObjectKey().contains("硬件工程师0922"), "入库文件名应来自 attach-fetch(fileName)");
         assertTrue(storageService.exists(files.get(0).getObjectKey()), "附件应写入存储");
-        verify(commandService).attachDownload(any(), eq("im1"), anyString(), any());
+        verify(commandService).attachFetch(any(), eq("im1"), anyString(), any());
+        assertEquals("m-100", greetingMapper.selectById(record.getId()).getAttachProbeMsgId(), "探测成功后应写消息级标记");
+        verify(commandService, never()).requestResume(any(), anyString(), any());
+        assertFalse(Files.exists(pdf), "下载临时文件应清理");
     }
 
-    // ---------- 附件:下载失败 → 不入库、无半状态、下轮重试 ----------
+    // ---------- 附件:获取失败 → 不入库、无半状态、下轮重试(不写探测标记) ----------
 
     @Test
     void attachmentFailureLeavesNoHalfStateAndRetriesNextRound() throws Exception {
         Candidate candidate = knownCandidate("im1", "张三");
-        greeting(candidate);
+        GreetingRecord record = greeting(candidate);
 
-        stubChatlist("{\"im_id\":\"im1\",\"direction\":\"1\"}");
-        stubChatmsg("im1",
-                "{\"sender\":\"对方\",\"payload\":{\"bodies\":[{\"type\":\"file\",\"fileId\":\"f1\",\"filename\":\"简历.pdf\"}]}}");
-        when(commandService.attachDownload(any(), eq("im1"), anyString(), any()))
-                .thenThrow(new CliException(CliException.Type.FAILED, "浏览器下载已被取消"));
+        stubChatlist("{\"im_id\":\"im1\",\"direction\":\"1\",\"raw_metadata\":{\"latestMsgId\":\"m-9\"}}");
+        when(commandService.attachFetch(any(), eq("im1"), anyString(), any()))
+                .thenReturn(Optional.of(objectMapper.readTree(
+                        "{\"found\":true,\"success\":false,\"reason\":\"download-failed\",\"detail\":\"取消\"}")));
 
         int first = chatPollService.pollOnce(account);
         int second = chatPollService.pollOnce(account);
 
         assertEquals(0, first);
         assertEquals(0, second);
-        assertEquals(0, resumeFileMapper.selectCount(new LambdaQueryWrapper<>()), "下载失败不得入库(无半状态)");
-        verify(commandService, times(2)).attachDownload(any(), eq("im1"), anyString(), any());
+        assertEquals(0, resumeFileMapper.selectCount(new LambdaQueryWrapper<>()), "失败不得入库(无半状态)");
+        verify(commandService, times(2)).attachFetch(any(), eq("im1"), anyString(), any());
+        assertNull(greetingMapper.selectById(record.getId()).getAttachProbeMsgId(), "失败不得写探测标记(下轮重试)");
+    }
+
+    // ---------- 附件探测防抖(消息级) ----------
+
+    @Test
+    void attachProbeDebouncedBySameMessageId() throws Exception {
+        Jd jd = confirmedJd("招聘主管", "88888");
+        Candidate candidate = knownCandidate("im1", "张三");
+        candidate.setJdId(jd.getId());
+        candidateMapper.updateById(candidate);
+        GreetingRecord record = greeting(candidate);
+        record.setAttachProbeMsgId("m-100");
+        greetingMapper.updateById(record);
+
+        stubChatlist("{\"im_id\":\"im1\",\"direction\":\"1\",\"raw_metadata\":{\"latestMsgId\":\"m-100\"}}");
+        stubChatmsg("im1", "{\"payload\":{\"bodies\":[{\"type\":\"txt\",\"msg\":\"您好\"}]}}");
+        when(commandService.requestResume(any(), eq("r-im1"), any()))
+                .thenReturn(Optional.of(objectMapper.readTree("{\"success\":true,\"confirmed\":true}")));
+
+        chatPollService.pollOnce(account);
+
+        verify(commandService, never()).attachFetch(any(), anyString(), anyString(), any());
+        verify(commandService).requestResume(any(), eq("r-im1"), any()); // 防抖不阻塞"回复索要"
+    }
+
+    @Test
+    void attachProbeRetriggersWhenMessageIdChanges() throws Exception {
+        Candidate candidate = knownCandidate("im1", "张三");
+        GreetingRecord record = greeting(candidate);
+        record.setAttachProbeMsgId("m-100");
+        greetingMapper.updateById(record);
+
+        stubChatlist("{\"im_id\":\"im1\",\"direction\":\"1\",\"raw_metadata\":{\"latestMsgId\":\"m-200\"}}");
+        when(commandService.attachFetch(any(), eq("im1"), anyString(), any()))
+                .thenReturn(Optional.of(objectMapper.readTree("{\"found\":false,\"success\":false,\"reason\":\"no-attachment\"}")));
+
+        chatPollService.pollOnce(account);
+
+        verify(commandService).attachFetch(any(), eq("im1"), anyString(), any());
+        assertEquals("m-200", greetingMapper.selectById(record.getId()).getAttachProbeMsgId(), "新消息应重探并更新标记");
     }
 
     // ---------- 文本回复:门槛未确认 → 不索要 ----------
@@ -277,10 +319,8 @@ class ChatPollServiceTest {
         Candidate candidate = knownCandidate("im1", "张三");
         greeting(candidate);
 
-        stubChatlist("{\"im_id\":\"im1\",\"direction\":\"1\"}");
-        stubChatmsg("im1",
-                "{\"sender\":\"对方\",\"payload\":{\"bodies\":[{\"type\":\"file\",\"fileId\":\"f1\",\"filename\":\"简历.pdf\"}]}}");
-        when(commandService.attachDownload(any(), eq("im1"), anyString(), any()))
+        stubChatlist("{\"im_id\":\"im1\",\"direction\":\"1\",\"raw_metadata\":{\"latestMsgId\":\"m-risk\"}}");
+        when(commandService.attachFetch(any(), eq("im1"), anyString(), any()))
                 .thenThrow(new CliException(CliException.Type.RISK_CONTROL, "安全验证"));
 
         assertThrows(CliException.class, () -> chatPollService.pollOnce(account));
@@ -309,66 +349,25 @@ class ChatPollServiceTest {
         greeting(b);
 
         when(commandService.chatlist(any(), any())).thenReturn(List.of(
-                objectMapper.readTree("{\"im_id\":\"imA\",\"direction\":\"1\"}"),
-                objectMapper.readTree("{\"im_id\":\"imB\",\"direction\":\"1\"}")));
-        when(commandService.chatmsg(any(), eq("imA"), any()))
-                .thenThrow(new RuntimeException("会话 A 读取失败"));
-        stubChatmsg("imB",
-                "{\"sender\":\"对方\",\"payload\":{\"bodies\":[{\"type\":\"file\",\"fileId\":\"fB\",\"filename\":\"乙.pdf\"}]}}");
+                objectMapper.readTree("{\"im_id\":\"imA\",\"direction\":\"1\",\"raw_metadata\":{\"latestMsgId\":\"mA\"}}"),
+                objectMapper.readTree("{\"im_id\":\"imB\",\"direction\":\"1\",\"raw_metadata\":{\"latestMsgId\":\"mB\"}}")));
+        when(commandService.attachFetch(any(), eq("imA"), anyString(), any()))
+                .thenThrow(new RuntimeException("会话 A 附件获取失败"));
         Path pdf = writePdf("b.pdf");
-        when(commandService.attachDownload(any(), eq("imB"), anyString(), any()))
-                .thenReturn(Optional.of(downloadResult(pdf)));
+        when(commandService.attachFetch(any(), eq("imB"), anyString(), any()))
+                .thenReturn(Optional.of(attachFetchResult(pdf, "乙.pdf")));
 
         int processed = chatPollService.pollOnce(account);
 
         assertEquals(1, processed, "A 失败不阻断 B");
         assertEquals(1, resumeFileMapper.selectCount(new LambdaQueryWrapper<ResumeFile>()
                 .eq(ResumeFile::getCandidateId, b.getId())), "B 的附件仍应入库");
-        verify(commandService, never()).attachDownload(any(), eq("imA"), anyString(), any());
+        assertEquals(0, resumeFileMapper.selectCount(new LambdaQueryWrapper<ResumeFile>()
+                .eq(ResumeFile::getCandidateId, a.getId())), "A 失败不得入库");
     }
 
-    // ---------- I-1:附件检测只认「对方」消息 ----------
-
-    @Test
-    void ownAttachmentMessageIsNotTreatedAsCandidateAttachment() throws Exception {
-        Candidate candidate = knownCandidate("im1", "张三");
-        candidate.setPassStatus("FAIL");
-        candidateMapper.updateById(candidate);
-
-        stubChatlist("{\"im_id\":\"im1\",\"direction\":\"1\"}");
-        // 对方纯文本 + 我方(招聘方)最新发出的附件卡片 → 不得把「我方附件」当候选人简历入库
-        stubChatmsg("im1",
-                "{\"sender\":\"对方\",\"payload\":{\"bodies\":[{\"type\":\"txt\",\"msg\":\"您好\"}]}}",
-                "{\"sender\":\"我\",\"payload\":{\"bodies\":[{\"type\":\"file\",\"fileId\":\"mine\",\"filename\":\"JD.pdf\"}]}}");
-
-        int processed = chatPollService.pollOnce(account);
-
-        assertEquals(0, processed);
-        verify(commandService, never()).attachDownload(any(), anyString(), anyString(), any());
-        assertEquals(0, resumeFileMapper.selectCount(new LambdaQueryWrapper<>()), "我方附件不得入库");
-    }
-
-    @Test
-    void counterpartyAttachmentInHistoryIsDownloaded() throws Exception {
-        Candidate candidate = knownCandidate("im1", "张三");
-        greeting(candidate);
-
-        stubChatlist("{\"im_id\":\"im1\",\"direction\":\"1\"}");
-        // 我方也发过附件,但对方发过附件 → 只取对方的,正常入库
-        stubChatmsg("im1",
-                "{\"sender\":\"我\",\"payload\":{\"bodies\":[{\"type\":\"file\",\"fileId\":\"mine\",\"filename\":\"mine.pdf\"}]}}",
-                "{\"sender\":\"对方\",\"payload\":{\"bodies\":[{\"type\":\"file\",\"fileId\":\"f1\",\"filename\":\"简历.pdf\"}]}}");
-        Path pdf = writePdf("resume.pdf");
-        when(commandService.attachDownload(any(), eq("im1"), anyString(), any()))
-                .thenReturn(Optional.of(downloadResult(pdf)));
-
-        int processed = chatPollService.pollOnce(account);
-
-        assertEquals(1, processed);
-        assertEquals(1, resumeFileMapper.selectCount(new LambdaQueryWrapper<ResumeFile>()
-                .eq(ResumeFile::getCandidateId, candidate.getId())));
-        verify(commandService).attachDownload(any(), eq("im1"), anyString(), any());
-    }
+    // ---------- 附件获取异常隔离(旧“消息体扫描”用例已随 2026-09-26 检测重构移除;----------
+    // ---------- 发送方过滤原则改由 CLI 层覆盖,见 attach-fetch.test.ts“只认对方消息”) ----------
 
     // ---------- I-3:陌生来话带附件、无身份标识 → 占位入库待分配 ----------
 
@@ -431,8 +430,8 @@ class ChatPollServiceTest {
     // ---------- I-2:同轮多次外发共享 AccountPaceGuard,await→mark 成对有序 ----------
 
     @Test
-    void outboundActionsAwaitAndMarkPaceGuardInOrder() throws Exception {
-        // 会话 A:附件下载;会话 B:门槛确认+PASS 文本回复索要 → 同轮两次外发
+    void outboundRequestActionsAwaitAndMarkPaceGuardInOrder() throws Exception {
+        // 会话 A:附件获取(纯接口读,不占发送节奏);会话 B:门槛确认+PASS 文本回复索要 → 仅索要占用节奏
         Candidate a = knownCandidate("imA", "甲");
         greeting(a);
         Jd jd = confirmedJd("招聘主管", "88888");
@@ -442,27 +441,25 @@ class ChatPollServiceTest {
         greeting(b);
 
         when(commandService.chatlist(any(), any())).thenReturn(List.of(
-                objectMapper.readTree("{\"im_id\":\"imA\",\"direction\":\"1\"}"),
-                objectMapper.readTree("{\"im_id\":\"imB\",\"direction\":\"1\"}")));
-        stubChatmsg("imA",
-                "{\"sender\":\"对方\",\"payload\":{\"bodies\":[{\"type\":\"file\",\"fileId\":\"fA\",\"filename\":\"甲.pdf\"}]}}");
-        stubChatmsg("imB", "{\"sender\":\"对方\",\"payload\":{\"bodies\":[{\"type\":\"txt\",\"msg\":\"您好\"}]}}");
+                objectMapper.readTree("{\"im_id\":\"imA\",\"direction\":\"1\",\"raw_metadata\":{\"latestMsgId\":\"mA\"}}"),
+                objectMapper.readTree("{\"im_id\":\"imB\",\"direction\":\"1\",\"raw_metadata\":{\"latestMsgId\":\"mB\"}}")));
         Path pdf = writePdf("a.pdf");
-        when(commandService.attachDownload(any(), eq("imA"), anyString(), any()))
-                .thenReturn(Optional.of(downloadResult(pdf)));
+        when(commandService.attachFetch(any(), eq("imA"), anyString(), any()))
+                .thenReturn(Optional.of(attachFetchResult(pdf, "甲.pdf")));
+        when(commandService.attachFetch(any(), eq("imB"), anyString(), any()))
+                .thenReturn(Optional.of(objectMapper.readTree("{\"found\":false,\"success\":false,\"reason\":\"no-attachment\"}")));
+        stubChatmsg("imB", "{\"sender\":\"对方\",\"payload\":{\"bodies\":[{\"type\":\"txt\",\"msg\":\"您好\"}]}}");
         when(commandService.requestResume(any(), eq("r-imB"), any()))
                 .thenReturn(Optional.of(objectMapper.readTree("{\"success\":true,\"confirmed\":true}")));
 
         chatPollService.pollOnce(account);
 
-        // 两次外发都必须先 await 再 mark,且逐一成对(证明共享同一守卫,不再各自为政)
+        // 索要(外发)必须 await→mark 成对且仅一次;附件获取为读操作,不占发送节奏
         InOrder order = inOrder(paceGuard);
         order.verify(paceGuard).await(account);
         order.verify(paceGuard).mark(account);
-        order.verify(paceGuard).await(account);
-        order.verify(paceGuard).mark(account);
-        verify(paceGuard, times(2)).await(account);
-        verify(paceGuard, times(2)).mark(account);
+        verify(paceGuard, times(1)).await(account);
+        verify(paceGuard, times(1)).mark(account);
     }
 
     // ---------- I2:im_id 缺失时按 user_id 回退匹配已知候选人 ----------
@@ -608,23 +605,20 @@ class ChatPollServiceTest {
     @Test
     void switchOffStillCollectsAttachment() throws Exception {
         Candidate candidate = knownCandidate("im1", "张三");
-        greeting(candidate);
+        GreetingRecord record = greeting(candidate);
         settingService.setEnabled(false);
 
-        stubChatlist("{\"im_id\":\"im1\",\"name\":\"张三\",\"direction\":\"1\"}");
-        stubChatmsg("im1",
-                "{\"message_id\":\"m1\",\"sender\":\"对方\",\"opposite_im_id\":\"im1\","
-                        + "\"payload\":{\"bodies\":[{\"type\":\"file\",\"fileId\":\"f1\",\"filename\":\"简历.pdf\"}]}}");
+        stubChatlist("{\"im_id\":\"im1\",\"name\":\"张三\",\"direction\":\"1\",\"raw_metadata\":{\"latestMsgId\":\"m-off-2\"}}");
         Path pdf = writePdf("resume-off.pdf");
-        when(commandService.attachDownload(any(), eq("im1"), anyString(), any()))
-                .thenReturn(Optional.of(downloadResult(pdf)));
+        when(commandService.attachFetch(any(), eq("im1"), anyString(), any()))
+                .thenReturn(Optional.of(attachFetchResult(pdf, "简历.pdf")));
 
         int processed = chatPollService.pollOnce(account);
 
         assertEquals(1, processed, "附件收集不受开关影响");
-        verify(commandService).attachDownload(any(), eq("im1"), anyString(), any());
         assertEquals(1, resumeFileMapper.selectCount(new LambdaQueryWrapper<ResumeFile>()
                 .eq(ResumeFile::getCandidateId, candidate.getId())), "附件应照常入库");
+        assertEquals("m-off-2", greetingMapper.selectById(record.getId()).getAttachProbeMsgId());
     }
 
     // ---------- 轮内重试:chatlist 首次失败(非风控)后重试成功 ----------
@@ -723,6 +717,21 @@ class ChatPollServiceTest {
         node.put("bytes", PDF.length);
         node.put("sha256", "deadbeef");
         node.put("sourceOrigin", "https://tdoss.liepin.com");
+        return node;
+    }
+
+    /** attach-fetch 成功输出(与 CLI 契约一致) */
+    private JsonNode attachFetchResult(Path pdf, String fileName) {
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("found", true);
+        node.put("success", true);
+        node.put("file", pdf.toAbsolutePath().toString());
+        node.put("bytes", PDF.length);
+        node.put("sha256", "deadbeef");
+        node.put("fileName", fileName);
+        node.put("fileExtension", "pdf");
+        node.put("sourceOrigin", "https://tdoss.liepin.com");
+        node.put("via", "api");
         return node;
     }
 }

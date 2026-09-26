@@ -40,10 +40,11 @@ import java.util.Optional;
  *         {@code direction=1}(候选人最后发言)的会话——无新来信则既无附件也无回复。</li>
  *     <li><b>已知候选人</b>(候选人在 snapshot 中带有该 im_id):
  *         <ul>
- *             <li>最新消息含附件卡片(payload.bodies 含 {@code file}/{@code fileId})且
- *                 {@code resume_file} 无记录 → attach-download 下载到工作目录 → 校验返回 success →
- *                 {@code saveResumeFile} 入库(<b>不看分数/门槛</b>);下载或入库失败只记日志、不写半状态,
- *                 下轮自动重试(以「resume_file 是否已有该候选人记录」判重,不用内容哈希)。</li>
+ *             <li>对方最后发言且 {@code resume_file} 无记录 → CLI {@code attach-fetch}(纯接口:消息 ext
+ *                 {@code bizType=7} 检出附件卡 → attachmentSign 换下载地址 → 浏览器下载通道)下载到工作目录 →
+ *                 {@code saveResumeFile} 入库(<b>不看分数/门槛</b>);消息级防抖
+ *                 ({@code greeting_record.attach_probe_msg_id}):无附件记标记跳过、失败不记标记下轮重试。
+ *                 (2026-09-26 检测信号重构:旧“payload.bodies 扫描”实测恒空,导致附件从未入库)</li>
  *             <li>仅文本回复 → 门槛已确认 + 评分 PASS + 未 REQUESTED → 复用既有索要路径。</li>
  *         </ul></li>
  *     <li><b>陌生来话</b>(im_id 未匹配任何候选人):chatmsg 提取在线简历卡片的 {@code enresId};
@@ -217,8 +218,12 @@ public class ChatPollService {
     }
 
     /**
-     * 已知候选人:附件优先入库(不看分数);文本回复按门槛+评分索要;
-     * 对方未回复但已读我方最新消息(会话级 oppositeRead=1)同样索要(不等回复,2026-09-26 新增)。
+     * 已知候选人:先经 attach-fetch 探测/获取附件卡片(附件优先入库,不看分数);
+     * 无附件则按回复索要;对方未回复但已读我方最新消息(会话级 oppositeRead=1)同样索要(不等回复)。
+     *
+     * <p>2026-09-26 检测信号重构:附件卡片不是消息体的附件块,而是挂在候选人消息的
+     * {@code payload.ext.extBody.bizData}(bizType=7)上,旧的消息体扫描恒空、附件从未入库;
+     * 现由 CLI attach-fetch 纯接口检出(零已读副作用),需消息级防抖避免重复探测。</p>
      */
     private boolean handleKnownCandidate(LiepinAccount account, Candidate candidate, String imId,
                                          String direction, JsonNode session, Duration timeout) {
@@ -227,12 +232,11 @@ public class ChatPollService {
             return false;
         }
         if ("1".equals(direction)) {
-            // 候选人最后发言:拉消息,附件优先,否则按回复索要
-            List<JsonNode> messages = commandService.chatmsg(account, imId, timeout);
-            JsonNode attachment = findLatestAttachment(messages);
-            if (attachment != null) {
-                return downloadAndStore(account, candidate, imId, attachment, timeout);
+            // 候选人最后发言:先经 attach-fetch 探测/获取附件(API 路线)
+            if (fetchAttachmentIfNew(account, candidate, imId, session, timeout)) {
+                return true;
             }
+            // 无附件/已探测过/获取失败 → 走既有"回复索要"逻辑
             return requestResumeForKnown(account, candidate, timeout);
         }
         // 对方沉默:仅当"对方已读我方最新消息"时索要,不做其他动作(不拉消息,零额外平台请求)
@@ -240,6 +244,77 @@ public class ChatPollService {
             return requestResumeOnRead(account, candidate);
         }
         return false;
+    }
+
+    /**
+     * 附件探测/获取(防抖:同一会话最新消息 ID 只探测一次,标记写入 greeting_record.attach_probe_msg_id)。
+     * 成功入库返回 true;无附件(记标记)/已探测/失败(不记标记,下轮重试)返回 false。
+     * 附件入库不受门槛/评分限制;运行时开关 OFF 也照常收集(只停主动外发)。
+     */
+    private boolean fetchAttachmentIfNew(LiepinAccount account, Candidate candidate, String imId,
+                                         JsonNode session, Duration timeout) {
+        GreetingRecord record = greetingMapper.selectOne(new LambdaQueryWrapper<GreetingRecord>()
+                .eq(GreetingRecord::getCandidateId, candidate.getId())
+                .last("LIMIT 1"));
+        String latestMsgId = session.path("raw_metadata").path("latestMsgId").asText("").trim();
+        if (record == null || latestMsgId.isEmpty() || latestMsgId.equals(record.getAttachProbeMsgId())) {
+            return false;
+        }
+        Optional<JsonNode> result = commandService.attachFetch(account, imId, attachWorkDir(), timeout);
+        JsonNode node = result.orElse(null);
+        if (node == null) {
+            log.warn("附件获取无输出,下轮重试(候选人 {})", candidate.getId());
+            return false;
+        }
+        if (node.path("success").asBoolean(false)) {
+            return storeFetchedAttachment(record, candidate, node, latestMsgId);
+        }
+        if ("no-attachment".equals(node.path("reason").asText(""))) {
+            markAttachProbe(record, latestMsgId);
+            log.debug("候选人 {} 无附件卡片(已探测 {}),不再重复", candidate.getId(), latestMsgId);
+            return false;
+        }
+        log.warn("附件获取失败,下轮重试(候选人 {}): {} {}", candidate.getId(),
+                node.path("reason").asText(""), node.path("detail").asText(""));
+        return false;
+    }
+
+    /** 读取 attach-fetch 落盘文件 → 校验 → 入库(文件名来自接口);成功后写探测标记并清理临时文件 */
+    private boolean storeFetchedAttachment(GreetingRecord record, Candidate candidate,
+                                           JsonNode node, String latestMsgId) {
+        String filePath = node.path("file").asText("").trim();
+        String fileName = node.path("fileName").asText("").trim();
+        if (fileName.isEmpty()) {
+            fileName = "resume.pdf";
+        }
+        byte[] content;
+        try {
+            content = Files.readAllBytes(Paths.get(filePath));
+        } catch (IOException | RuntimeException e) {
+            log.warn("附件读取失败,下轮重试(候选人 {}): {}", candidate.getId(), e.getMessage());
+            return false;
+        }
+        if (content.length == 0) {
+            log.warn("附件内容为空,拒绝入库(候选人 {}),下轮重试", candidate.getId());
+            return false;
+        }
+        try {
+            resumeCollectService.saveResumeFile(candidate.getId(), fileName, content, "application/pdf");
+        } catch (Exception e) {
+            log.warn("附件入库失败,下轮重试(候选人 {}): {}", candidate.getId(), e.getMessage());
+            return false;
+        }
+        deleteQuietly(filePath);
+        markAttachProbe(record, latestMsgId);
+        log.info("候选人 {} 附件已获取入库({} 字节, 文件名={}, sha256={})",
+                candidate.getId(), content.length, fileName, node.path("sha256").asText(""));
+        return true;
+    }
+
+    /** 写附件探测标记(同一消息 ID 不再重复探测;新消息到来会自然触发重探) */
+    private void markAttachProbe(GreetingRecord record, String latestMsgId) {
+        record.setAttachProbeMsgId(latestMsgId);
+        greetingMapper.updateById(record);
     }
 
     /** 已读即索要:记录/评分/门槛前置检查 → 账号节流 → 直接索要(不检测回复,复用既有守卫) */
@@ -545,6 +620,9 @@ public class ChatPollService {
      * 最新一条「对方」发出且含附件卡片的消息 body(type=file 或含 fileId)。
      * 仅扫描 sender=对方 的消息(评审 I-1):我方发出的附件不算候选人简历;
      * sender 为空/「未知」同样不得作为附件来源(不猜)。
+     *
+     * <p>注(2026-09-26):真实附件卡片在消息 {@code ext.bizData}(bizType=7)上,
+     * 已知候选人路径已改由 CLI attach-fetch 检出;本方法仅保留给陌生来话兜底路径。</p>
      */
     private static JsonNode findLatestAttachment(List<JsonNode> messages) {
         for (int i = messages.size() - 1; i >= 0; i--) {

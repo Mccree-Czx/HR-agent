@@ -153,6 +153,23 @@ public class LiepinCommandService {
     }
 
     /**
+     * 获取简历附件(API 路线,2026-09-26):纯接口检出附件卡片 + 浏览器下载通道落盘,
+     * 输出三态 JSON:{found:false,reason:no-attachment} / {found:true,success:false,reason} / 成功含 file/bytes/sha256/fileName。
+     * 不打开会话(零已读副作用);签名值不出现在输出中。
+     */
+    public Optional<JsonNode> attachFetch(LiepinAccount account, String imId, String outDir, Duration timeout) {
+        if (imId == null || imId.isBlank()) {
+            throw BizException.badRequest("attach-fetch 必须提供会话 im_id");
+        }
+        if (outDir == null || outDir.isBlank()) {
+            throw BizException.badRequest("attach-fetch 必须提供下载目录");
+        }
+        CliResult result = run(account, timeout, "attach-fetch",
+                "--imId", imId, "--out", outDir, "--json");
+        return JsonExtractor.parse(result.stdout());
+    }
+
+    /**
      * 打招呼 → 输出对象(含 success 标记)。
      * ejobId 必传:猎聘发起沟通必须挂在具体职位下,缺省时 CLI 会回退到账号第一个职位(导致错配)。
      * message 用 --message 传递(位置参数只能被 CLI 识别首个)。

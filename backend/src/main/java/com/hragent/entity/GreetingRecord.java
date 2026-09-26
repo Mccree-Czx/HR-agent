@@ -21,6 +21,9 @@ public class GreetingRecord {
     /** 打招呼实际关联的猎聘职位 ID(来源岗位的 liepin_job_id,审计用) */
     private String liepinJobId;
 
+    /** 附件探测标记:已探测的会话最新消息 ID(同一消息不重复探测;NULL=从未探测) */
+    private String attachProbeMsgId;
+
     private String message;
 
     private String status;
