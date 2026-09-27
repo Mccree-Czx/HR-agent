@@ -19,7 +19,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { Page } from 'puppeteer-core';
-import { navigateToLpt } from '../common/lpt-utils.js';
+import { navigateToLpt, waitForSelectorSafe } from '../common/lpt-utils.js';
 import { requirePage } from '../common/utils.js';
 
 export interface AttachDownloadOptions {
@@ -46,7 +46,8 @@ const TRUSTED_ORIGINS = [
   'https://wow.liepin.com',
 ];
 const DEFAULT_MAX_BYTES = 20 * 1024 * 1024;
-const SELECTOR_TIMEOUT_MS = 15000;
+/** 选择器等待上限（毫秒）；LIEPIN_SELECTOR_TIMEOUT_MS 供测试注入短超时，避免真等超时路径 */
+const selectorTimeoutMs = (): number => Number(process.env.LIEPIN_SELECTOR_TIMEOUT_MS || 15000);
 const DOWNLOAD_TIMEOUT_MS = 60000;
 /** allowAndName 落盘文件名就是 guid，必须是无路径分隔符的安全标识 */
 const GUID_PATTERN = /^[a-zA-Z0-9-]+$/;
@@ -117,7 +118,7 @@ export async function attachDownload(
 
   // 2. 等附件卡片出现，点最后一张卡片的「附件简历」
   try {
-    await page.waitForSelector('.im-ui-send-attachment-card', { timeout: SELECTOR_TIMEOUT_MS });
+    await waitForSelectorSafe(page, '.im-ui-send-attachment-card', { timeout: selectorTimeoutMs() });
   } catch {
     throw new Error('会话中未出现附件卡片（超时）；不猜测附件位置');
   }
@@ -139,7 +140,7 @@ export async function attachDownload(
 
   // 3. 等预览弹窗，校验唯一可见下载按钮
   try {
-    await page.waitForSelector('.im-ui-preview-modal-title-box', { timeout: SELECTOR_TIMEOUT_MS });
+    await waitForSelectorSafe(page, '.im-ui-preview-modal-title-box', { timeout: selectorTimeoutMs() });
   } catch {
     throw new Error('附件预览弹窗未出现（超时）');
   }

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { assertLptPageAlive, RiskControlError, safeGoto, withTimeout } from './lpt-utils.js';
+import { assertLptPageAlive, clickSafe, RiskControlError, safeGoto, waitForSelectorSafe, withTimeout } from './lpt-utils.js';
 
 const fakePage = (url: string) => ({ url: () => url }) as any;
 
@@ -77,4 +77,57 @@ test('safeGoto: 拿不到主会话（mock page）时退化为普通 goto', async
   const page: any = { goto: async () => { calls.push('goto'); } };
   await safeGoto(page, 'https://lpt.liepin.com/');
   assert.deepEqual(calls, ['goto']);
+});
+
+test('waitForSelectorSafe: 轮询至命中（evaluate 不受后台页签 rAF 挂起影响）', async () => {
+  let calls = 0;
+  const page: any = {
+    evaluate: async () => {
+      calls += 1;
+      return calls >= 3;
+    },
+  };
+  await waitForSelectorSafe(page, '.x', { timeout: 2000, intervalMs: 5 });
+  assert.equal(calls, 3);
+});
+
+test('waitForSelectorSafe: 超时抛出带选择器与时长的错误', async () => {
+  const page: any = { evaluate: async () => false };
+  await assert.rejects(
+    () => waitForSelectorSafe(page, '.never', { timeout: 60, intervalMs: 10 }),
+    /等待元素超时（60ms）: \.never/,
+  );
+});
+
+test('waitForSelectorSafe: 单次查询报错不终止轮询，后续命中仍成功', async () => {
+  let calls = 0;
+  const page: any = {
+    evaluate: async () => {
+      calls += 1;
+      if (calls === 1) throw new Error('boom');
+      return true;
+    },
+  };
+  await waitForSelectorSafe(page, '.x', { timeout: 2000, intervalMs: 5 });
+  assert.equal(calls, 2);
+});
+
+test('clickSafe: 元素存在时执行页面内点击', async () => {
+  const seen: string[] = [];
+  const page: any = {
+    evaluate: async (_fn: unknown, sel: string) => {
+      seen.push(sel);
+      return true;
+    },
+  };
+  await clickSafe(page, '.btn');
+  assert.deepEqual(seen, ['.btn']);
+});
+
+test('clickSafe: 页面中不存在元素时报明确错误', async () => {
+  const page: any = { evaluate: async () => false };
+  await assert.rejects(
+    () => clickSafe(page, '.missing'),
+    /点击失败：页面中不存在元素 \.missing/,
+  );
 });

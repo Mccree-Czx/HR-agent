@@ -18,6 +18,9 @@ import {
   readLptImId,
   getResumeInfo,
   openResumeImPanel,
+  waitForSelectorSafe,
+  clickSafe,
+  stepLog,
 } from '../common/lpt-utils.js';
 import { sleepRandom } from '../common/utils.js';
 
@@ -102,6 +105,7 @@ async function verifyMessageSent(page: Page, oppositeImId: string, message: stri
 
 async function sendMessageInIm(page: Page, resumeId: string, oppositeImId: string, message: string): Promise<void> {
   await openResumeImPanel(page, resumeId);
+  stepLog('IM 面板已打开，开始填入话术');
 
   // React 受控组件：keyboard.type 中文输入极慢且易超时，execCommand 才能触发 React 状态更新
   await page.evaluate((msg: string) => {
@@ -111,10 +115,20 @@ async function sendMessageInIm(page: Page, resumeId: string, oppositeImId: strin
     document.execCommand('insertText', false, msg);
   }, message);
 
-  // 输入生效后发送按钮才会从 disabled 变为可用
-  await page.waitForSelector('.im-ui-basic-send-btn:not([disabled])', { timeout: 5000 });
-  await page.click('.im-ui-basic-send-btn:not([disabled])');
+  // 回读输入框：填不进去时立即给出准确错误，不让后续「等发送按钮」白白超时
+  const filledLength = await page.evaluate(
+    () => (document.querySelector('.im-ui-textarea') as HTMLTextAreaElement | null)?.value?.length ?? -1,
+  );
+  if (filledLength <= 0) {
+    throw new Error('话术填入失败：IM 输入框仍为空');
+  }
+  stepLog('话术已填入输入框');
+
+  // 输入生效后发送按钮才会从 disabled 变为可用（*Safe 版本：不依赖页签渲染帧，后台页签可用）
+  await waitForSelectorSafe(page, '.im-ui-basic-send-btn:not([disabled])', { timeout: 5000 });
+  await clickSafe(page, '.im-ui-basic-send-btn:not([disabled])');
   await sleepRandom(1500, 2500);
+  stepLog('已点击发送，开始确认送达');
 
   const sent = await verifyMessageSent(page, oppositeImId, message);
   if (!sent) {
@@ -127,6 +141,7 @@ async function sendMessageInIm(page: Page, resumeId: string, oppositeImId: strin
       throw new Error('消息发送后未确认成功（聊天记录与页面中均未找到该消息）');
     }
   }
+  stepLog('消息发送已确认');
 }
 
 export async function greet(page: Page, options: GreetOptions): Promise<any> {

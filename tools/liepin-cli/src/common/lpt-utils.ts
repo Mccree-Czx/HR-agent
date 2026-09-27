@@ -97,6 +97,71 @@ export function withTimeout<T>(promise: Promise<T>, ms: number, label: string): 
 }
 
 /**
+ * 后台页签安全的 waitForSelector。
+ *
+ * puppeteer 的 waitForSelector 默认用 rAF 轮询，而 Chrome 会挂起不可见页签的
+ * requestAnimationFrame：用户打开任意其他页签后，等待永不完成，直到底层 CDP
+ * 调用挂满 60s 协议超时（2026-09-27 实测：greet 全链路报 Runtime.callFunctionOn
+ * timed out，候选人只收到预设招呼语、收不到自定义话术）。Runtime.evaluate 不受
+ * 渲染帧影响，这里改为 Node 侧定时 + 单次 evaluate 查询。
+ */
+export async function waitForSelectorSafe(
+  page: Page,
+  selector: string,
+  opts: { timeout?: number; intervalMs?: number } = {},
+): Promise<void> {
+  const { timeout = 15_000, intervalMs = 250 } = opts;
+  const startedAt = Date.now();
+  let lastError: string | null = null;
+  while (Date.now() - startedAt < timeout) {
+    try {
+      const found = await withTimeout(
+        page.evaluate((sel: string) => Boolean(document.querySelector(sel)), selector),
+        5_000,
+        '等待元素 evaluate',
+      );
+      if (found) {
+        stepLog(`waitForSelectorSafe 命中 ${selector}（用时 ${Date.now() - startedAt}ms）`);
+        return;
+      }
+    } catch (e: any) {
+      lastError = String(e?.message || e);
+    }
+    await sleep(intervalMs);
+  }
+  throw new Error(
+    `等待元素超时（${timeout}ms）: ${selector}` + (lastError ? `；最后一次查询错误: ${lastError}` : ''),
+  );
+}
+
+/**
+ * 后台页签安全的点击。
+ *
+ * puppeteer 的 page.click 依赖页面内 IntersectionObserver
+ * （scrollIntoViewIfNeeded → isIntersectingViewport），不可见页签下回调同样
+ * 永不触发、挂满协议超时。改为 evaluate 内 scrollIntoView + el.click()：
+ * 布局同步计算、事件同步派发，与页签可见性无关。元素 disabled 时点击无效果，
+ * 调用方应先用 waitForSelectorSafe 等就绪。
+ */
+export async function clickSafe(page: Page, selector: string): Promise<void> {
+  const clicked = await withTimeout(
+    page.evaluate((sel: string) => {
+      const el = document.querySelector(sel) as HTMLElement | null;
+      if (!el) return false;
+      el.scrollIntoView({ block: 'center', inline: 'nearest' });
+      el.click();
+      return true;
+    }, selector),
+    10_000,
+    '点击 evaluate',
+  );
+  if (!clicked) {
+    throw new Error(`点击失败：页面中不存在元素 ${selector}`);
+  }
+  stepLog(`clickSafe 已点击 ${selector}`);
+}
+
+/**
  * 在 puppeteer 主会话上开关 Runtime 域。开关是按会话生效的，
  * 断开连接后自然消失，不会给浏览器留下残留状态。
  */
@@ -335,7 +400,9 @@ export async function getResumeInfo(page: Page, resumeId: string): Promise<LptRe
 export async function openResumeImPanel(page: Page, resumeId: string): Promise<void> {
   await safeGoto(page, `https://lpt.liepin.com/resume/detail?resIdEncode=${encodeURIComponent(resumeId)}&sfrom=R_SEARCH_CONDITION`);
   assertLptPageAlive(page, '打开简历详情');
-  await page.waitForSelector('.xpath-open-im-btn', { timeout: 20000 });
-  await page.click('.xpath-open-im-btn');
-  await page.waitForSelector('.im-ui-textarea', { timeout: 20000 });
+  // 等元素/点击一律走 *Safe 版本：puppeteer 原生 waitForSelector/click 依赖页签
+  // 渲染帧，自动化页签在后台时会挂满 60s 协议超时（2026-09-27 事故）
+  await waitForSelectorSafe(page, '.xpath-open-im-btn', { timeout: 20000 });
+  await clickSafe(page, '.xpath-open-im-btn');
+  await waitForSelectorSafe(page, '.im-ui-textarea', { timeout: 20000 });
 }

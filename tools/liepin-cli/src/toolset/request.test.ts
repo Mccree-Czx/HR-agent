@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import { requestPhone, requestResume, requestPhoneCommand, requestResumeCommand } from './request.js';
 import { parsePayload } from './chatmsg.js';
 
+// 缩短"等不到元素"路径的等待（waitForSelectorSafe 在调用时读取），测试不真等 15 秒
+process.env.LIEPIN_SELECTOR_TIMEOUT_MS = '300';
+
 const RESUME_VIEW = 'resume-view';
 const CHAT_LIST = 'chat-list';
 
@@ -29,15 +32,18 @@ function fakePage(opts: {
     url: () => 'https://lpt.liepin.com/resume/detail',
     goto: async () => {},
     mainFrame: () => ({ client: { send: async () => {} } }),
-    waitForSelector: async (sel: string) => {
-      if (opts.actionMissing && sel.includes('action-')) throw new Error('timeout');
-      calls.push(`wait:${sel}`);
-    },
-    click: async (sel: string) => {
-      calls.push(`click:${sel}`);
-      if (sel.includes('action-')) clickedAction = true;
-    },
     evaluate: async (_fn: any, ...args: any[]) => {
+      const src = String(_fn);
+      // waitForSelectorSafe：按实参选择器判存在性（actionMissing 表示按钮未渲染）
+      if (typeof args[0] === 'string' && src.includes('Boolean(document.querySelector(')) {
+        return !(opts.actionMissing && String(args[0]).includes('action-'));
+      }
+      // clickSafe：页面内点击，按实际点击的按钮记账
+      if (typeof args[0] === 'string' && src.includes('scrollIntoView')) {
+        calls.push(`click:${args[0]}`);
+        if (String(args[0]).includes('action-')) clickedAction = true;
+        return true;
+      }
       if (args.length === 4) {
         const url = String(args[0]);
         if (url.includes(RESUME_VIEW)) {

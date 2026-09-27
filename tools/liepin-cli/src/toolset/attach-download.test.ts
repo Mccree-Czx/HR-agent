@@ -10,6 +10,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { attachDownload, attachDownloadCommand } from './attach-download.js';
 
+// 缩短"等不到元素"路径的等待（waitForSelectorSafe 在调用时读取），测试不真等 15 秒
+process.env.LIEPIN_SELECTOR_TIMEOUT_MS = '300';
+
 const PDF = Buffer.concat([
   Buffer.from('%PDF-1.7\n'),
   Buffer.from('mock body bytes'),
@@ -62,13 +65,14 @@ function makePage(opts: PageOptions) {
     url: () => 'https://lpt.liepin.com/chat/im',
     goto: async () => {},
     mainFrame: () => ({}),
-    waitForSelector: async (selector: string) => {
-      waited.push(selector);
-      if (opts.rejectSelector === selector) throw new Error('timeout');
-    },
     evaluate: async (fn: any, ..._args: any[]) => {
       const src = String(fn);
       evaluateSources.push(src);
+      // waitForSelectorSafe：按选择器实参判存在性（rejectSelector 指定"等不到"的元素）
+      const argSelector = typeof _args[0] === 'string' ? (_args[0] as string) : undefined;
+      if (argSelector && src.includes('Boolean(document.querySelector(')) {
+        return argSelector !== opts.rejectSelector;
+      }
       if (src.includes('im-ui-contact-list-item')) return opts.sessionStatus ?? 'clicked';
       if (src.includes('im-ui-send-attachment-card')) return opts.attachmentClicked ?? true;
       if (src.includes('im-ui-preview-modal-title-box')) return opts.downloadButtons ?? 1;

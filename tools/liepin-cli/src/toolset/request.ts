@@ -16,6 +16,8 @@ import {
   getResumeInfo,
   openResumeImPanel,
   readLptImId,
+  waitForSelectorSafe,
+  clickSafe,
 } from '../common/lpt-utils.js';
 import { sleepRandom } from '../common/utils.js';
 
@@ -35,6 +37,9 @@ const ACTION_LABEL: Record<RequestKind, string> = {
   phone: '索要手机号',
   resume: '索要简历',
 };
+
+/** 选择器等待上限（毫秒）；LIEPIN_SELECTOR_TIMEOUT_MS 供测试注入短超时，避免真等超时路径 */
+const selectorTimeoutMs = (): number => Number(process.env.LIEPIN_SELECTOR_TIMEOUT_MS || 15000);
 
 /** 取会话里最新一条消息的 id，用来判断点击之后到底有没有发出去 */
 async function latestMessageId(page: Page, oppositeImId: string): Promise<string> {
@@ -99,7 +104,7 @@ async function requestFromCandidate(page: Page, kind: RequestKind, options: Requ
 
   const selector = ACTION_SELECTOR[kind];
   try {
-    await page.waitForSelector(selector, { timeout: 15000 });
+    await waitForSelectorSafe(page, selector, { timeout: selectorTimeoutMs() });
   } catch {
     throw new Error(
       `会话里找不到「${ACTION_LABEL[kind]}」按钮（${selector}）。` +
@@ -119,7 +124,7 @@ async function requestFromCandidate(page: Page, kind: RequestKind, options: Requ
     };
   }
 
-  await page.click(selector);
+  await clickSafe(page, selector);
   await sleepRandom(1200, 2000);
   const dialogConfirmed = await confirmDialogIfPresent(page);
   if (dialogConfirmed) {
