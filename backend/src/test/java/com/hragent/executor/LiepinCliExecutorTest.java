@@ -105,6 +105,22 @@ class LiepinCliExecutorTest {
         executor.checkRisk(account(1), result); // 不应抛异常
     }
 
+    @Test
+    void checkRiskIgnoresGenericKeywordsInBusinessData() {
+        // 回归(2026-09-27):简历 JSON 里的 verify 触发误熔断,轮次全停
+        LiepinCliExecutor executor = newExecutor();
+        CliResult result = new CliResult(0, "[{\"name\":\"李四\",\"skills\":\"SoC verification, verify\"}]", "", false);
+        executor.checkRisk(account(1), result); // 成功路径的业务数据不应被泛词误判
+    }
+
+    @Test
+    void checkRiskStillDetectsGenericKeywordsOnFailure() {
+        LiepinCliExecutor executor = newExecutor();
+        CliResult result = new CliResult(1, "Error: navigate to captcha challenge", "", false);
+        CliException e = assertThrows(CliException.class, () -> executor.checkRisk(account(1), result));
+        assertEquals(CliException.Type.RISK_CONTROL, e.getType());
+    }
+
     // ---------- I1:账号维度互斥(同账号串行 / 不同账号不互斥) ----------
 
     @Test

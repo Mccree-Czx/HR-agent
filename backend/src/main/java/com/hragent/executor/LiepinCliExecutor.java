@@ -39,10 +39,17 @@ public class LiepinCliExecutor {
     /** 账号维度互斥锁:保证同账号 CLI 子进程串行,规避同账号并发浏览器自动化风控风险 */
     private final ConcurrentHashMap<Long, ReentrantLock> accountLocks = new ConcurrentHashMap<>();
 
-    /** 风控拦截特征(命中则账号熔断,评审 P0-3) */
+    /** 风控拦截的精确标记（命中则账号熔断，评审 P0-3；全路径扫描）。
+     *  只放平台风控页特有的域名/中文短语，这些词不会出现在候选人数据里。 */
     private static final List<String> RISK_KEYWORDS = List.of(
-            "captcha", "verify", "security-check", "safe.liepin.com",
-            "行为异常", "安全验证", "滑块验证", "forbidden");
+            "captchaPage", "safe.liepin.com", "行为异常", "安全验证", "滑块验证");
+
+    /** 泛英文风控词：仅在命令失败/超时路径扫描。
+     *  成功时 stdout 是业务数据（如候选人简历 JSON），泛词误命中会让账号误熔断
+     *  （2026-09-27 实测：候选人简历里的 verify 触发熔断，轮次全停）；
+     *  失败/超时时的输出是 CLI 自身错误文本，此处扫描才可信。 */
+    private static final List<String> RISK_KEYWORDS_FAILURE_ONLY = List.of(
+            "captcha", "verify", "security-check", "forbidden");
 
     /** 登录态失效特征 */
     private static final List<String> NOT_LOGGED_KEYWORDS = List.of(
@@ -148,6 +155,14 @@ public class LiepinCliExecutor {
             if (output.contains(kw.toLowerCase())) {
                 throw new CliException(CliException.Type.RISK_CONTROL,
                         "检测到风控拦截特征 [" + kw + "](account=" + account.getId() + ")");
+            }
+        }
+        if (result.timedOut() || result.exitCode() != 0) {
+            for (String kw : RISK_KEYWORDS_FAILURE_ONLY) {
+                if (output.contains(kw.toLowerCase())) {
+                    throw new CliException(CliException.Type.RISK_CONTROL,
+                            "检测到风控拦截特征 [" + kw + "](account=" + account.getId() + ")");
+                }
             }
         }
         for (String kw : NOT_LOGGED_KEYWORDS) {
