@@ -3,8 +3,10 @@
     <el-aside width="200px" class="aside">
       <div class="logo">HR Agent</div>
       <el-menu :default-active="$route.path" router background-color="#F2F3EF" text-color="#5C665F" active-text-color="#285E52">
-        <el-menu-item index="/jd">岗位管理</el-menu-item>
+        <el-menu-item index="/dashboard">驾驶舱</el-menu-item>
         <el-menu-item index="/candidate">候选人台账</el-menu-item>
+        <el-menu-item index="/jd">岗位管理</el-menu-item>
+        <el-menu-item v-if="isAdmin" index="/runs">运行日志</el-menu-item>
         <el-menu-item index="/account">账号管理</el-menu-item>
         <el-menu-item v-if="isAdmin" index="/user">用户管理</el-menu-item>
       </el-menu>
@@ -39,7 +41,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { autoRecruitApi } from '../api/modules'
 
 const router = useRouter()
@@ -64,6 +66,19 @@ async function loadAutoRecruit() {
 }
 
 async function toggleAutoRecruit(value) {
+  // 关闭外发为高影响操作:二次确认(取消时回滚开关显示)
+  if (!value) {
+    try {
+      await ElMessageBox.confirm(
+        '关闭后仅收集(检测回复/附件/评分/推荐)，不再主动发消息(打招呼/索要)，确认关闭？',
+        '关闭自动外发',
+        { type: 'warning', confirmButtonText: '确认关闭', cancelButtonText: '取消' }
+      )
+    } catch {
+      arEnabled.value = true // 用户取消 → 回滚
+      return
+    }
+  }
   arLoading.value = true
   try {
     const res = await autoRecruitApi.setEnabled({ enabled: value })
@@ -103,8 +118,13 @@ onUnmounted(() => {
   if (arTimer) clearInterval(arTimer)
 })
 
-function handleCommand(command) {
+async function handleCommand(command) {
   if (command === 'logout') {
+    try {
+      await ElMessageBox.confirm('确定退出登录？', '退出确认', { type: 'warning' })
+    } catch {
+      return // 用户取消
+    }
     localStorage.removeItem('token')
     localStorage.removeItem('role')
     localStorage.removeItem('username')

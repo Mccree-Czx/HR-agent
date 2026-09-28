@@ -39,15 +39,26 @@ export const auditApi = {
 
 export const candidateApi = {
   page: (params) => http.get('/candidate', { params }),
-  // 简历下载(blob):HR 按分配岗位授权;前端转 objectURL 打开预览
-  resumeBlob: (id) => http.get(`/candidate/${id}/resume`, { responseType: 'blob' })
+  // 简历下载(blob):HR 按分配岗位授权;前端转 objectURL 预览
+  resumeBlob: (id) => http.get(`/candidate/${id}/resume`, { responseType: 'blob' }),
+  // 详情抽屉三区(基本信息/AI 评分/简历资料)
+  detail: (id) => http.get(`/candidate/${id}/detail`),
+  // 招聘跟进状态(HR 工作流:待筛选/合格/已约面/不合适)
+  setRecruitStatus: (id, recruitStatus) => http.patch(`/candidate/${id}/recruit-status`, { recruitStatus })
 }
 
 export const autoRecruitApi = {
   status: () => http.get('/auto-recruit/status'),
   setEnabled: (data) => http.put('/auto-recruit/enabled', data),
   // 手动一轮为同步执行(可能耗时较长),关闭 axios 超时
-  runOnce: () => http.post('/auto-recruit/run-once', null, { timeout: 0 })
+  runOnce: () => http.post('/auto-recruit/run-once', null, { timeout: 0 }),
+  // 运行历史(轮次摘要,倒序分页;ADMIN)
+  rounds: (params) => http.get('/auto-recruit/rounds', { params })
+}
+
+export const dashboardApi = {
+  // 驾驶舱聚合(按当前用户授权岗位范围过滤)
+  summary: () => http.get('/dashboard/summary')
 }
 
 export const recruitApi = {

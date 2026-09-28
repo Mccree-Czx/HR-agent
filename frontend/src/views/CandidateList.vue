@@ -13,6 +13,9 @@
         <el-option label="已通过" value="PASS" />
         <el-option label="未通过" value="FAIL" />
       </el-select>
+      <el-select v-model="filterRecruit" placeholder="招聘状态" clearable style="width: 130px" @change="load()">
+        <el-option v-for="opt in recruitOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+      </el-select>
       <template v-if="activeTab === 'received' && isAdmin">
         <el-button type="warning" :loading="runOnceLoading" @click="runOnce">立即运行一轮</el-button>
         <el-button @click="advancedVisible = !advancedVisible">{{ advancedVisible ? '收起高级操作' : '高级操作' }}</el-button>
@@ -27,7 +30,7 @@
       <el-button type="warning" :disabled="!selectedJdId" :loading="recommendLoading" @click="runRecommend">拉取平台推荐</el-button>
     </div>
 
-    <el-table :data="rows" v-loading="loading" border>
+    <el-table :data="rows" v-loading="loading" border empty-text="没有符合条件的候选人">
       <el-table-column prop="candidate.id" label="ID" width="60" />
       <el-table-column prop="candidate.name" label="候选人" width="100" />
       <el-table-column label="简历快照" min-width="220" show-overflow-tooltip>
@@ -35,9 +38,10 @@
           <span v-if="row.candidate.snapshot">{{ snapshotSummary(row.candidate.snapshot) }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="评分" width="150">
+      <el-table-column label="评分" width="190">
         <template #default="{ row }">
           <template v-if="row.latestScore">
+            <span class="score-stars">{{ starText(row.latestScore.score) }}</span>
             <el-tag :type="row.candidate.passStatus === 'PASS' ? 'success' : 'danger'" size="small">
               {{ row.latestScore.score }} 分
             </el-tag>
@@ -57,7 +61,7 @@
         <template #default="{ row }">
           <template v-if="row.greeting">
             <el-tooltip :content="`关联猎聘职位: ${row.greeting.liepinJobId || '无(历史记录)'}`">
-              <el-tag :type="greetTagType(row.greeting.status)" size="small">{{ greetText(row.greeting.status) }}</el-tag>
+              <el-tag :type="tagOf(GREETING_STATUS, row.greeting.status)" size="small">{{ textOf(GREETING_STATUS, row.greeting.status) }}</el-tag>
             </el-tooltip>
           </template>
           <el-tag v-else type="info" size="small">未联系</el-tag>
@@ -69,13 +73,26 @@
           <el-tag v-else type="info" size="small">未入库</el-tag>
         </template>
       </el-table-column>
+      <el-table-column label="招聘状态" width="110">
+        <template #default="{ row }">
+          <el-tag :type="tagOf(RECRUIT_STATUS, row.candidate.recruitStatus)" size="small">
+            {{ textOf(RECRUIT_STATUS, row.candidate.recruitStatus) }}
+          </el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column v-if="activeTab === 'received'" label="最后查看" width="130">
+        <template #default="{ row }">
+          <span class="last-viewed">{{ lastViewedOf(row) }}</span>
+        </template>
+      </el-table-column>
       <el-table-column v-if="activeTab === 'received'" label="操作" width="190" fixed="right">
         <template #default="{ row }">
-          <el-button v-if="row.resumeFile" link type="primary" @click="viewResume(row)">查看简历</el-button>
+          <el-button link type="primary" @click="openDetail(row)">详情</el-button>
           <el-button v-if="isAdmin" link type="primary" @click="redo(row.candidate.id)">重新打分</el-button>
         </template>
       </el-table-column>
     </el-table>
+    <CandidateDrawer v-model="drawerVisible" :candidate-id="drawerId" @updated="load()" />
     <el-pagination
       class="pagination"
       layout="total, prev, pager, next"
@@ -89,8 +106,10 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { jdApi, candidateApi, recruitApi, searchTaskApi, autoRecruitApi } from '../api/modules'
+import CandidateDrawer from '../components/CandidateDrawer.vue'
+import { GREETING_STATUS, RECRUIT_STATUS, textOf, tagOf, optionsOf, starText } from '../utils/labels'
 
 // 待分配视图仅 ADMIN 可见:后端 unassigned=true 亦仅对 ADMIN 生效(评审 I-1)
 const isAdmin = computed(() => localStorage.getItem('role') === 'ADMIN')
@@ -99,11 +118,30 @@ const rows = ref([])
 const jds = ref([])
 const selectedJdId = ref(null)
 const filterStatus = ref('')
+const filterRecruit = ref('')
+const recruitOptions = optionsOf(RECRUIT_STATUS)
 const activeTab = ref('received')
 const total = ref(0)
 const pageNo = ref(1)
 const pageSize = 10
 const loading = ref(false)
+
+// ---------- 详情抽屉(三区:基本信息/AI 评分/简历资料) ----------
+const drawerVisible = ref(false)
+const drawerId = ref(null)
+
+function openDetail(row) {
+  drawerId.value = row.candidate.id
+  drawerVisible.value = true
+}
+
+function lastViewedOf(row) {
+  const c = row.candidate
+  if (!c.resumeLastViewedAt) return '未读'
+  const isMe = row.lastViewedByName && row.lastViewedByName === localStorage.getItem('username')
+  const viewer = isMe ? '我' : (row.lastViewedByName || '他人')
+  return `${viewer} · ${String(c.resumeLastViewedAt).slice(5, 16).replace('T', ' ')}`
+}
 
 async function loadJds() {
   const res = await jdApi.page({ pageNo: 1, pageSize: 100 })
@@ -124,7 +162,8 @@ async function load(page = 1) {
     const params = {
       pageNo: pageNo.value,
       pageSize,
-      passStatus: filterStatus.value || undefined
+      passStatus: filterStatus.value || undefined,
+      recruitStatus: filterRecruit.value || undefined
     }
     if (activeTab.value === 'received') {
       // 已收简历:仅入库成功者;可按岗位/评分状态筛选
@@ -149,13 +188,6 @@ function snapshotSummary(snapshot) {
   } catch {
     return snapshot
   }
-}
-
-function greetTagType(status) {
-  return { SENT: 'primary', AGREED: 'success', REQUESTED: 'warning', PENDING_CONFIRM: 'info', SEND_FAILED: 'danger' }[status] || 'info'
-}
-function greetText(status) {
-  return { SENT: '已打招呼', AGREED: '候选人已同意', REQUESTED: '已索要简历', PENDING_CONFIRM: '待确认', SEND_FAILED: '发送失败' }[status] || status
 }
 
 async function runScore() {
@@ -187,6 +219,15 @@ const advancedVisible = ref(false)
 const runOnceLoading = ref(false)
 
 async function runOnce() {
+  try {
+    await ElMessageBox.confirm(
+      '将立即执行一轮自动招聘（检测回复 / 评分 / 打招呼 / 推荐），耗时可能较长，确认执行？',
+      '执行确认',
+      { type: 'warning', confirmButtonText: '立即执行', cancelButtonText: '取消' }
+    )
+  } catch {
+    return // 用户取消
+  }
   runOnceLoading.value = true
   try {
     await autoRecruitApi.runOnce()
@@ -199,17 +240,7 @@ async function runOnce() {
   }
 }
 
-// ---------- 简历查看(blob 转 objectURL 预览;HR 按分配岗位授权) ----------
-async function viewResume(row) {
-  try {
-    const blob = await candidateApi.resumeBlob(row.candidate.id)
-    const url = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }))
-    window.open(url, '_blank')
-    setTimeout(() => URL.revokeObjectURL(url), 5 * 60 * 1000)
-  } catch {
-    // 拦截器已提示(403/404)
-  }
-}
+// ---------- 简历查看已迁入详情抽屉(应用内预览 + 读标记) ----------
 
 const recommendLoading = ref(false)
 
@@ -245,6 +276,16 @@ onMounted(async () => {
   font-size: 12px;
   color: var(--el-color-primary);
   cursor: pointer;
+}
+.score-stars {
+  color: #e6a23c;
+  margin-right: 6px;
+  font-size: 13px;
+  letter-spacing: 1px;
+}
+.last-viewed {
+  font-size: 12px;
+  color: var(--hr-text-3);
 }
 .tab-hint {
   color: var(--hr-text-3);
