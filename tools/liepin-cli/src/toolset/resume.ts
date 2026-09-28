@@ -18,7 +18,7 @@ export interface ResumeOptions {
 export interface ExpectationEntry {
   title: string;
   // 仅供离线验证：人工核实并归一化的职能，不是猜测的平台字段或编码。
-  reviewedFamily?: 'hardware' | 'hr' | 'software';
+  reviewedFamily?: 'hardware' | 'hr' | 'software' | 'ecommerce-ops' | 'sales' | 'structure' | 'design';
   categorySource?: string;
 }
 
@@ -31,11 +31,24 @@ export interface ExpectationEvidence {
 
 const EXPECTATION_SOURCE = 'resumeDetailVo.jobWant.jobTitleNames';
 // 明确同义映射，不按“工程师”、行业或关键词包含关系泛化。
+const KNOWN_FAMILIES = ['hardware', 'hr', 'software', 'ecommerce-ops', 'sales', 'structure', 'design'] as const;
 const TITLE_FAMILIES = new Map<string, string>([
   ['硬件工程师', 'hardware'], ['硬件研发工程师', 'hardware'], ['高级硬件工程师', 'hardware'],
   ['高级硬件研发工程师', 'hardware'],
   ['人力资源总监', 'hr'], ['HR总监', 'hr'], ['招聘经理', 'hr'],
   ['软件工程师', 'software'],
+  // 2026-09-28 晚职能映射扩展(与后端 JobMatchEvaluator 完全一致,解锁岗位 7-10)
+  ['资深亚马逊运营', 'ecommerce-ops'], ['跨境电商运营', 'ecommerce-ops'], ['电商运营', 'ecommerce-ops'],
+  ['运营经理/主管', 'ecommerce-ops'], ['运营专员', 'ecommerce-ops'], ['商家运营', 'ecommerce-ops'],
+  ['品类运营', 'ecommerce-ops'], ['海外运营', 'ecommerce-ops'],
+  ['海外ToB渠道销售（出海品牌）', 'sales'], ['渠道经理', 'sales'], ['海外销售', 'sales'],
+  ['大客户销售', 'sales'], ['销售经理/主管', 'sales'], ['销售代表', 'sales'],
+  ['外贸经理/主管', 'sales'], ['外贸专员/助理', 'sales'], ['区域销售经理/主管', 'sales'],
+  ['销售总监', 'sales'], ['销售运营', 'sales'],
+  ['高级结构工程师', 'structure'], ['机械结构工程师', 'structure'], ['家电/3C结构工程师', 'structure'],
+  ['结构工程师', 'structure'],
+  ['资深工业设计师', 'design'], ['工业/产品设计', 'design'], ['设计经理/主管', 'design'],
+  ['设计总监', 'design'], ['汽车造型设计', 'design'], ['工业设计', 'design'], ['产品设计', 'design'],
 ]);
 
 export function extractJobExpectations(vo: any): ExpectationEvidence {
@@ -54,7 +67,7 @@ export function extractJobExpectations(vo: any): ExpectationEvidence {
 export function matchJobExpectations(evidence: ExpectationEvidence, target: ExpectationEntry) {
   const result = (status: 'match' | 'mismatch' | 'unknown', reason: string) => ({
     status, reason, can_continue_scoring: status === 'match', can_send: false,
-    mapping_version: 'explicit-title-alias-v1',
+    mapping_version: 'explicit-title-alias-v2',
   });
   if (evidence?.source !== EXPECTATION_SOURCE || evidence.malformed || !Array.isArray(evidence.entries) || !evidence.entries.length) {
     return result('unknown', '缺少可靠的求职期望或字段格式异常');
@@ -62,7 +75,7 @@ export function matchJobExpectations(evidence: ExpectationEvidence, target: Expe
   const classify = (entry: ExpectationEntry) => {
     const alias = TITLE_FAMILIES.get(typeof entry?.title === 'string' ? entry.title.trim() : '');
     const category = entry?.reviewedFamily;
-    if (category && (!entry.categorySource?.trim() || !['hardware', 'hr', 'software'].includes(category))) {
+    if (category && (!entry.categorySource?.trim() || !KNOWN_FAMILIES.includes(category))) {
       return { family: undefined, conflict: true };
     }
     return { family: category || alias, conflict: Boolean(category && alias && category !== alias) };

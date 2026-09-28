@@ -156,4 +156,45 @@ class JobMatchEvaluatorTest {
         assertEquals(JobMatchEvaluator.Status.MATCH,
                 JobMatchEvaluator.evaluateFromSnapshot(snapshot, "硬件工程师").status());
     }
+
+    // ---------- 职能映射扩展(2026-09-28 晚,解锁岗位 7-10) ----------
+
+    @Test
+    void ecommerceOpsFamilyMatchesAmazonOperatorTarget() {
+        assertEquals(JobMatchEvaluator.Status.MATCH, status(List.of("跨境电商运营"), "资深亚马逊运营"));
+        assertEquals(JobMatchEvaluator.Status.MATCH, status(List.of("电商运营"), "资深亚马逊运营"));
+    }
+
+    @Test
+    void salesFamilyMatchesOverseasChannelSalesTarget() {
+        assertEquals(JobMatchEvaluator.Status.MATCH, status(List.of("渠道经理"), "海外ToB渠道销售（出海品牌）"));
+        assertEquals(JobMatchEvaluator.Status.MATCH, status(List.of("海外销售"), "海外ToB渠道销售（出海品牌）"));
+    }
+
+    @Test
+    void structureFamilyMatchesSeniorStructureEngineerTarget() {
+        assertEquals(JobMatchEvaluator.Status.MATCH, status(List.of("机械结构工程师"), "高级结构工程师"));
+        assertEquals(JobMatchEvaluator.Status.MATCH, status(List.of("家电/3C结构工程师"), "高级结构工程师"));
+    }
+
+    @Test
+    void designFamilyMatchesIndustrialDesignerTarget() {
+        assertEquals(JobMatchEvaluator.Status.MATCH, status(List.of("工业/产品设计"), "资深工业设计师"));
+        assertEquals(JobMatchEvaluator.Status.MATCH, status(List.of("汽车造型设计"), "资深工业设计师"));
+    }
+
+    @Test
+    void newFamiliesCrossMismatch() {
+        assertEquals(JobMatchEvaluator.Status.MISMATCH, status(List.of("跨境电商运营"), "高级结构工程师"));
+        assertEquals(JobMatchEvaluator.Status.MISMATCH,
+                status(List.of("工业/产品设计"), "海外ToB渠道销售（出海品牌）"));
+        assertEquals(JobMatchEvaluator.Status.MISMATCH, status(List.of("跨境电商运营"), "硬件工程师"));
+    }
+
+    @Test
+    void borderlineTitlesRemainUnknown() {
+        assertEquals(JobMatchEvaluator.Status.UNKNOWN, status(List.of("机械工程师"), "高级结构工程师"));
+        assertEquals(JobMatchEvaluator.Status.UNKNOWN, status(List.of("产品经理"), "资深工业设计师"));
+        assertEquals(JobMatchEvaluator.Status.UNKNOWN, status(List.of("媒介投放"), "资深亚马逊运营"));
+    }
 }

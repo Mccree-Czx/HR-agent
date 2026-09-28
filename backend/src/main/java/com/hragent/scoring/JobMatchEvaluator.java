@@ -36,7 +36,8 @@ public final class JobMatchEvaluator {
     private static final String EXPECTATION_SOURCE = "resumeDetailVo.jobWant.jobTitleNames";
 
     /** 明确支持的职能族(与 CLI 一致) */
-    private static final Set<String> KNOWN_FAMILIES = Set.of("hardware", "hr", "software");
+    private static final Set<String> KNOWN_FAMILIES =
+            Set.of("hardware", "hr", "software", "ecommerce-ops", "sales", "structure", "design");
 
     /** 明确同义映射,与 CLI TITLE_FAMILIES 完全一致;不泛化 */
     private static final Map<String, String> TITLE_FAMILIES = Map.ofEntries(
@@ -47,7 +48,38 @@ public final class JobMatchEvaluator {
             Map.entry("人力资源总监", "hr"),
             Map.entry("HR总监", "hr"),
             Map.entry("招聘经理", "hr"),
-            Map.entry("软件工程师", "software"));
+            Map.entry("软件工程师", "software"),
+            // 2026-09-28 晚职能映射扩展(解锁岗位 7-10,按真实期望分布覆盖头部;边界项不收保持 UNKNOWN)
+            Map.entry("资深亚马逊运营", "ecommerce-ops"),
+            Map.entry("跨境电商运营", "ecommerce-ops"),
+            Map.entry("电商运营", "ecommerce-ops"),
+            Map.entry("运营经理/主管", "ecommerce-ops"),
+            Map.entry("运营专员", "ecommerce-ops"),
+            Map.entry("商家运营", "ecommerce-ops"),
+            Map.entry("品类运营", "ecommerce-ops"),
+            Map.entry("海外运营", "ecommerce-ops"),
+            Map.entry("海外ToB渠道销售（出海品牌）", "sales"),
+            Map.entry("渠道经理", "sales"),
+            Map.entry("海外销售", "sales"),
+            Map.entry("大客户销售", "sales"),
+            Map.entry("销售经理/主管", "sales"),
+            Map.entry("销售代表", "sales"),
+            Map.entry("外贸经理/主管", "sales"),
+            Map.entry("外贸专员/助理", "sales"),
+            Map.entry("区域销售经理/主管", "sales"),
+            Map.entry("销售总监", "sales"),
+            Map.entry("销售运营", "sales"),
+            Map.entry("高级结构工程师", "structure"),
+            Map.entry("机械结构工程师", "structure"),
+            Map.entry("家电/3C结构工程师", "structure"),
+            Map.entry("结构工程师", "structure"),
+            Map.entry("资深工业设计师", "design"),
+            Map.entry("工业/产品设计", "design"),
+            Map.entry("设计经理/主管", "design"),
+            Map.entry("设计总监", "design"),
+            Map.entry("汽车造型设计", "design"),
+            Map.entry("工业设计", "design"),
+            Map.entry("产品设计", "design"));
 
     private JobMatchEvaluator() {
     }

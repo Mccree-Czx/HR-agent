@@ -87,6 +87,28 @@ test('错误来源的职位证据拒绝匹配', () => {
   assert.equal(match({ source: 'baseInfo.title', entries: [{ title: '硬件工程师' }] }, { title: '硬件工程师' }).status, 'unknown');
 });
 
+test('职能映射扩展:新四族同义匹配(与后端 JobMatchEvaluatorTest 对齐)', () => {
+  const match = (module as any).matchJobExpectations;
+  assert.equal(match({ source: 'resumeDetailVo.jobWant.jobTitleNames', entries: [{ title: '跨境电商运营' }] },
+    { title: '资深亚马逊运营' }).status, 'match');
+  assert.equal(match({ source: 'resumeDetailVo.jobWant.jobTitleNames', entries: [{ title: '渠道经理' }] },
+    { title: '海外ToB渠道销售（出海品牌）' }).status, 'match');
+  assert.equal(match({ source: 'resumeDetailVo.jobWant.jobTitleNames', entries: [{ title: '机械结构工程师' }] },
+    { title: '高级结构工程师' }).status, 'match');
+  assert.equal(match({ source: 'resumeDetailVo.jobWant.jobTitleNames', entries: [{ title: '工业/产品设计' }] },
+    { title: '资深工业设计师' }).status, 'match');
+});
+
+test('职能映射扩展:跨族失配与边界项保持 unknown', () => {
+  const match = (module as any).matchJobExpectations;
+  assert.equal(match({ source: 'resumeDetailVo.jobWant.jobTitleNames', entries: [{ title: '跨境电商运营' }] },
+    { title: '高级结构工程师' }).status, 'mismatch');
+  assert.equal(match({ source: 'resumeDetailVo.jobWant.jobTitleNames', entries: [{ title: '机械工程师' }] },
+    { title: '高级结构工程师' }).status, 'unknown');
+  assert.equal(match({ source: 'resumeDetailVo.jobWant.jobTitleNames', entries: [{ title: '产品经理' }] },
+    { title: '资深工业设计师' }).status, 'unknown');
+});
+
 test('简历权限不足不返回匹配', async () => {
   const { page } = fakePage({}, 403);
   await assert.rejects(module.resume(page, { talentId: 'mock' }), { name: 'AuthExpiredError' });
