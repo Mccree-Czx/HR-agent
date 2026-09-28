@@ -19,6 +19,12 @@ export async function chatlist(page: Page, options: ChatlistOptions): Promise<an
     throw new Error('limit 必须为 1-100 的整数');
   }
 
+  // 实测(2026-09-27):平台对 pageSize>50 会静默降级为默认 20(请求 100 实得 20,
+  // 造成会话盲区——轮询看不到被挤出窗口的候选人);单页生效上限为 50,这里主动钳制。
+  // 注意:不得向 stderr 输出任何提示——后端把 stderr 并入 stdout 后用取首个
+  // 中括号的方式解析 JSON,含 [ 的杂音会直接破坏 chatlist 解析(2026-09-27 事故)
+  const effectiveLimit = Math.min(Number(limit), 50);
+
   // 落到 LPT 同源页面拿 cookie/imId（IM 数据走 api-lpt 接口，不依赖页面 DOM）；
   // 旧 /im 路由已被猎聘改版删除会 404，改用有效路由 /recommend
   await navigateToLpt(page, '/recommend', 3);
@@ -30,7 +36,7 @@ export async function chatlist(page: Page, options: ChatlistOptions): Promise<an
   }
 
   // 获取聊天列表
-  const body = `imUserType=2&imId=${encodeURIComponent(imId)}&imApp=1&pageSize=${Number(limit)}&curPage=${Number(pageNum) - 1}`;
+  const body = `imUserType=2&imId=${encodeURIComponent(imId)}&imApp=1&pageSize=${effectiveLimit}&curPage=${Number(pageNum) - 1}`;
   const data = await lptFetch(page, `${LIEPIN_LPT_API}/api/com.liepin.im.b.contact.get-contact-list`, { 
     body, 
     clientId: '40342' 
@@ -43,7 +49,7 @@ export async function chatlist(page: Page, options: ChatlistOptions): Promise<an
   if (!Array.isArray(data.data?.list)) throw new Error('聊天列表响应缺少 list 数组');
   const contacts = data.data.list;
 
-  const items = contacts.slice(0, Number(limit)).map((c: any) => {
+  const items = contacts.slice(0, effectiveLimit).map((c: any) => {
     // 解析最后消息
     let latestMsg = '';
     try {
@@ -80,7 +86,7 @@ export async function chatlist(page: Page, options: ChatlistOptions): Promise<an
       user_id: String(c.oppositeUserId || ''),
     };
   });
-  return chatPageResult(items, data.data, { curPage: Number(pageNum) - 1, pageSize: Number(limit) }, options.withMeta);
+  return chatPageResult(items, data.data, { curPage: Number(pageNum) - 1, pageSize: effectiveLimit }, options.withMeta);
 }
 
 /** 聊天列表命令定义 */
@@ -88,7 +94,7 @@ export const chatlistCommand = {
   name: 'chatlist',
   description: '查看聊天列表（招聘端）',
   args: [
-    { name: 'limit', type: 'int', default: 30, help: '返回条数（1-100）' },
+    { name: 'limit', type: 'int', default: 30, help: '返回条数（1-100；实测平台单页生效上限 50，超出按 50 请求）' },
     { name: 'page', type: 'int', default: 1, help: '页码（1-based，透传 curPage）；真实分页效果未验证' },
     { name: 'withMeta', type: 'boolean', default: false, help: '输出 items 和分页证据；不会自动翻页' },
   ],

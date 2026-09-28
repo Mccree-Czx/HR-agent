@@ -19,6 +19,8 @@ function fakePage(opts: {
   disabledAfter?: boolean;
   newMessage?: boolean;
   dialog?: boolean;
+  askforFlag?: number;
+  askforMsg?: string;
 } = {}) {
   const calls: string[] = [];
   let clickedAction = false;
@@ -46,6 +48,14 @@ function fakePage(opts: {
       }
       if (args.length === 4) {
         const url = String(args[0]);
+        // 索要简历直调接口（2026-09-27 起）
+        if (url.includes('askfor.send-askfor-request')) {
+          calls.push(`askfor:${String(args[1])}`);
+          if (opts.askforFlag !== undefined && opts.askforFlag !== 1) {
+            return { ok: true, status: 200, text: JSON.stringify({ flag: opts.askforFlag, msg: opts.askforMsg || '' }) };
+          }
+          return { ok: true, status: 200, text: JSON.stringify({ flag: 1, data: {} }) };
+        }
         if (url.includes(RESUME_VIEW)) {
           return {
             ok: true,
@@ -93,13 +103,34 @@ test('request-phone: 点的是「索要手机」按钮，并按会话新消息�
   assert.ok(calls.includes('click:.im-ui-action-button.action-phone'));
 });
 
-test('request-resume: 点的是「索要简历」按钮，不会点成手机', async () => {
+test('request-resume: 直调 askfor 接口(oppositeImId+bizType=3),不再点 DOM 按钮', async () => {
   const { page, calls } = fakePage({ newMessage: true });
 
-  await requestResume(page, { resumeId: 'r-1' });
+  const res = await requestResume(page, { resumeId: 'r-1' });
 
-  assert.ok(calls.includes('click:.im-ui-action-button.action-resume'));
-  assert.ok(!calls.some(c => c.includes('action-phone')));
+  assert.equal(res.success, true);
+  assert.equal(res.confirmed, true);
+  assert.ok(calls.includes('askfor:oppositeImId=im-1&bizType=3'), '应按契约调用 askfor 接口');
+  assert.ok(!calls.some((c) => c.includes('action-resume')), '不应再依赖 DOM 按钮');
+});
+
+test('request-resume: options.imId 优先(resume-view 无 im 字段时由后端注入)', async () => {
+  const { page, calls } = fakePage({ newMessage: true });
+
+  const res = await requestResume(page, { resumeId: 'r-1', imId: 'im-injected' });
+
+  assert.equal(res.success, true);
+  assert.ok(calls.includes('askfor:oppositeImId=im-injected&bizType=3'), '应使用注入的 imId');
+});
+
+test('request-resume: 平台未受理(flag=0)时不谎称成功,携带原因', async () => {
+  const { page } = fakePage({ askforFlag: 0, askforMsg: '今日索要次数已用完' });
+
+  const res = await requestResume(page, { resumeId: 'r-1' });
+
+  assert.equal(res.success, false);
+  assert.equal(res.confirmed, false);
+  assert.match(res.message, /今日索要次数已用完/);
 });
 
 test('会话里没多出消息、按钮也没变灰时，不谎称已送达', async () => {
