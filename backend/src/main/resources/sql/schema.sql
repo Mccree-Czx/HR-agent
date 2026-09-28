@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS liepin_account (
     circuit_breaker  TINYINT(1) NOT NULL DEFAULT 0 COMMENT '熔断标记:1=停止调度',
     greet_mode       VARCHAR(20) NOT NULL DEFAULT 'AUTO' COMMENT '打招呼模式 AUTO/MANUAL',
     daily_greet_quota INT NOT NULL DEFAULT 50 COMMENT '每日打招呼配额上限',
+    risk_reset_at    DATETIME COMMENT '熔断恢复(重置)时刻:冷却窗口判断用(2026-09-28)',
     created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT ='猎聘账号';
@@ -149,7 +150,7 @@ CREATE TABLE IF NOT EXISTS auto_recruit_round (
     id           BIGINT AUTO_INCREMENT PRIMARY KEY,
     started_at   DATETIME COMMENT '轮次开始时间',
     finished_at  DATETIME NOT NULL COMMENT '轮次结束时间',
-    mode         VARCHAR(20) NOT NULL COMMENT 'full/collectOnly',
+    mode         VARCHAR(20) NOT NULL COMMENT 'full/collectOnly/cooling',
     polled       INT NOT NULL DEFAULT 0,
     scored       INT NOT NULL DEFAULT 0,
     greeted      INT NOT NULL DEFAULT 0,

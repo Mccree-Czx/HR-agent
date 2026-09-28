@@ -90,7 +90,7 @@ public class HrAgentProperties {
         private int maxParseRetry = 2;
 
         /** 打招呼节奏:同账号两次打招呼最小间隔(秒) */
-        private int greetIntervalSeconds = 30;
+        private int greetIntervalSeconds = 60;
     }
 
     @Data
@@ -123,17 +123,26 @@ public class HrAgentProperties {
         /** 自动外发开关的首次种子(仅当 app_setting 中无值时生效;之后完全由界面开关控制,见 AutoRecruitSettingService) */
         private boolean enabled = false;
 
-        /** 单轮单岗位打招呼上限(取消小批量保护,近似放开:符合即打招呼;真实处理量由详情读取与推荐入口决定,可配置) */
-        private int greetBatchLimit = 50;
+        /** 单轮单岗位打招呼上限(2026-09-28 熔断治理降档:50→15,与 60s 外发间隔共同压低密度) */
+        private int greetBatchLimit = 15;
 
-        /** 单轮「在线简历详情」读取上限(只读平台调用,与推荐批次同量级,默认 20) */
-        private int resumeDetailBatchLimit = 20;
+        /** 单轮自动索要上限(索要预算;2026-09-28 熔断治理新增) */
+        private int askBatchLimit = 5;
 
-        /** 相邻两次简历详情读取的最小间隔(毫秒,读操作轻节流,默认 1000) */
-        private int resumeDetailIntervalMillis = 1000;
+        /** 单轮「在线简历详情」读取上限(只读平台调用,与推荐批次同量级,默认 10;2026-09-28 由 20 下调) */
+        private int resumeDetailBatchLimit = 10;
+
+        /** 轮内简历详情读取总预算(跨岗位合计;读取量是平台足迹大头,2026-09-28 新增) */
+        private int resumeDetailRoundLimit = 30;
+
+        /** 相邻两次简历详情读取的最小间隔(毫秒,读操作轻节流,默认 2000;2026-09-28 由 1000 下调速率) */
+        private int resumeDetailIntervalMillis = 2000;
 
         /** 会话列表(chatlist)拉取失败后的轮内重试等待(毫秒,默认 20s;测试置 1) */
         private int pollRetryDelayMillis = 20_000;
+
+        /** 熔断恢复(重置)后的冷却窗口(分钟):窗口内暂停主动外发并轻探测;0=关闭该机制(2026-09-28) */
+        private int riskCooldownMinutes = 120;
     }
 
     @Data

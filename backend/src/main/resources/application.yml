@@ -41,12 +41,18 @@ hr-agent:
   auto-recruit:
     # 自动外发开关的首次种子(仅库中无值时生效一次;之后由界面开关控制,存库持久化)
     enabled: ${AUTO_RECRUIT_ENABLED:false}
-    # 单轮单岗位打招呼上限(取消小批量保护,近似放开:符合即打招呼;可用 env 调整)
-    greet-batch-limit: ${AUTO_RECRUIT_GREET_BATCH_LIMIT:50}
-    # 单轮「在线简历详情」读取上限(只读平台调用,与推荐批次同量级)
-    resume-detail-batch-limit: ${AUTO_RECRUIT_RESUME_DETAIL_BATCH_LIMIT:20}
-    # 相邻两次简历详情读取的最小间隔(毫秒,读操作轻节流)
-    resume-detail-interval-millis: ${AUTO_RECRUIT_RESUME_DETAIL_INTERVAL_MILLIS:1000}
+    # 单轮单岗位打招呼上限(2026-09-28 熔断治理降档 50→15,与 60s 外发间隔共同压低密度)
+    greet-batch-limit: ${AUTO_RECRUIT_GREET_BATCH_LIMIT:15}
+    # 单轮自动索要上限(索要预算,2026-09-28 熔断治理新增)
+    ask-batch-limit: ${AUTO_RECRUIT_ASK_BATCH_LIMIT:5}
+    # 单轮「在线简历详情」读取上限(只读平台调用;读取量是平台足迹大头,2026-09-28 由 20 下调为 10)
+    resume-detail-batch-limit: ${AUTO_RECRUIT_RESUME_DETAIL_BATCH_LIMIT:10}
+    # 轮内简历详情读取总预算(跨岗位合计,2026-09-28 新增)
+    resume-detail-round-limit: ${AUTO_RECRUIT_RESUME_DETAIL_ROUND_LIMIT:30}
+    # 相邻两次简历详情读取的最小间隔(毫秒,读操作轻节流;2026-09-28 由 1000 放缓至 2000)
+    resume-detail-interval-millis: ${AUTO_RECRUIT_RESUME_DETAIL_INTERVAL_MILLIS:2000}
+    # 熔断恢复(重置)后的冷却窗口(分钟):窗口内暂停主动外发并轻探测;0=关闭(2026-09-28)
+    risk-cooldown-minutes: ${AUTO_RECRUIT_RISK_COOLDOWN_MINUTES:120}
     # 会话列表拉取失败后的轮内重试等待(毫秒)
     poll-retry-delay-millis: ${AUTO_RECRUIT_POLL_RETRY_DELAY_MILLIS:20000}
   storage:

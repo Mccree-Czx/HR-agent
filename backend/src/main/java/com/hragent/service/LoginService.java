@@ -8,6 +8,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -69,6 +70,8 @@ public class LoginService {
             if (success) {
                 fresh.setLoginStatus("NORMAL");
                 fresh.setCircuitBreaker(false);
+                // 恢复时刻入冷却窗口判断(2026-09-28):扫码登录成功后同样先进入冷却,避免立即全速外发
+                fresh.setRiskResetAt(LocalDateTime.now());
                 log.info("账号 {} 扫码登录成功", account.getId());
             } else {
                 fresh.setLoginStatus("NEED_SCAN");

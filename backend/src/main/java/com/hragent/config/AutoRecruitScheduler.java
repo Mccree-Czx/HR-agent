@@ -22,6 +22,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -150,6 +151,19 @@ public class AutoRecruitScheduler {
                 stats.noAccount = true;
                 return;
             }
+
+            // 熔断恢复冷却期(2026-09-28 治理):暂停主动外发,先轻探测确认平台已恢复;
+            // 被跳验证页会抛 RISK_CONTROL → 既有熔断链路处理,本轮立即停止(不自伤)
+            if (settingService.isCoolingDown(account)) {
+                enabled = false;
+                stats.setMode("cooling");
+                log.info("账号 {} 处于熔断冷却期(重置于 {}),本轮暂停外发并轻探测",
+                        account.getId(), account.getRiskResetAt());
+                chatPollService.probeAccount(account,
+                        Duration.ofMinutes(properties.getLiepin().getShortTimeoutMinutes()));
+            }
+            // 轮内简历详情读取预算重置(读取量是平台足迹大头,2026-09-28)
+            scoringEngine.beginRound();
 
             // 步骤 1:先处理来信与附件(被动通道;外发开关 OFF 时其内部跳过打招呼/索要类外发)
             try {
@@ -283,10 +297,10 @@ public class AutoRecruitScheduler {
         return day.plusDays(1).atTime(FIRST_HOUR, 0);
     }
 
-    /** 单轮运行统计(写入 auto_recruit.last_run 摘要) */
+    /** 单轮运行统计(写入 auto_recruit.last_run 摘要;mode 可变:冷却期切换为 cooling,2026-09-28) */
     private static final class RoundStats {
 
-        private final String mode;
+        private String mode;
         private boolean noAccount;
         private boolean riskStopped;
         private int polled;
@@ -296,6 +310,10 @@ public class AutoRecruitScheduler {
         private int errors;
 
         private RoundStats(String mode) {
+            this.mode = mode;
+        }
+
+        private void setMode(String mode) {
             this.mode = mode;
         }
 

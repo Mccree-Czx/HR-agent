@@ -196,6 +196,31 @@ class ScoringEnginePendingTest {
     }
 
     @Test
+    void roundReadBudgetCapsDetailFetches() throws Exception {
+        createNormalAccount();
+        when(aiClient.chat(anyString(), anyString()))
+                .thenReturn("{\"score\":75,\"pass\":true,\"summary\":\"ok\",\"reasons\":[\"a\"]}");
+        candidate("{\"name\":\"甲\",\"resume_id\":\"res-1\"}");
+        candidate("{\"name\":\"乙\",\"resume_id\":\"res-2\"}");
+        when(commandService.resume(any(), anyString(), any())).thenReturn(Optional.of(
+                objectMapper.readTree("{\"want_title\":\"软件工程师\",\"expectation_evidence\":{"
+                        + "\"source\":\"resumeDetailVo.jobWant.jobTitleNames\","
+                        + "\"entries\":[{\"title\":\"软件工程师\"}]}}")));
+        try {
+            // 轮内预算=1:两个缺期望数据的候选人只允许 1 次详情读取(读取量是平台足迹大头)
+            properties.getAutoRecruit().setResumeDetailRoundLimit(1);
+            scoringEngine.beginRound();
+
+            scoringEngine.scorePending(jd.getId());
+
+            verify(commandService, times(1)).resume(any(), anyString(), any());
+        } finally {
+            properties.getAutoRecruit().setResumeDetailRoundLimit(30); // 恢复默认
+            scoringEngine.beginRound(); // 重建预算,避免耗尽后的预算泄漏到后续用例
+        }
+    }
+
+    @Test
     void scorePendingKeepsUnknownWhenResumeDetailEmpty() {
         createNormalAccount();
         Candidate c = candidate("{\"name\":\"张三\",\"resume_id\":\"res-1\"}");

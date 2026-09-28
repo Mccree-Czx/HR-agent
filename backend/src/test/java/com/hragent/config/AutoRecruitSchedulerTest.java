@@ -36,6 +36,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -401,5 +402,24 @@ class AutoRecruitSchedulerTest {
         assertFalse(round.getNoAccount());
         assertNotNull(round.getFinishedAt());
         assertNotNull(round.getStatsJson());
+    }
+
+    // ---------- 熔断冷却窗口(2026-09-28 治理) ----------
+
+    @Test
+    void coolingDownRunProbesAndSkipsOutbound() {
+        Long id = createAccount();
+        LiepinAccount account = accountMapper.selectById(id);
+        account.setRiskResetAt(LocalDateTime.now().minusMinutes(5)); // 冷却窗口内(默认 120 分钟)
+        accountMapper.updateById(account);
+        Jd jd = createActiveJd("123");
+        when(chatPollService.poll()).thenReturn(0);
+
+        scheduler.runRound(WORK_TIME);
+
+        assertEquals("cooling", settingService.lastRun().orElseThrow().path("mode").asText(),
+                "冷却期内轮次应标记 cooling 模式");
+        verify(chatPollService).probeAccount(any(), any());
+        verify(greetingService, never()).greetPassed(anyLong(), anyInt());
     }
 }

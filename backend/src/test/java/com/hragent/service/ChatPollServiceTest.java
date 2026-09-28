@@ -644,6 +644,53 @@ class ChatPollServiceTest {
         verify(commandService).requestResume(any(), eq("r-im1"), any(), any());
     }
 
+    // ---------- 熔断治理:轮内索要预算与冷却窗口(2026-09-28) ----------
+
+    @Test
+    void askBudgetCapsAutomaticAsksPerPoll() throws Exception {
+        Jd jd = confirmedJd("招聘主管", "88888");
+        GreetingRecord[] records = new GreetingRecord[6];
+        String[] sessions = new String[6];
+        for (int i = 1; i <= 6; i++) {
+            Candidate candidate = knownCandidate("im" + i, "候选" + i);
+            candidate.setJdId(jd.getId());
+            candidateMapper.updateById(candidate);
+            records[i - 1] = greeting(candidate);
+            sessions[i - 1] = "{\"im_id\":\"im" + i + "\",\"direction\":\"0\",\"raw_metadata\":{\"oppositeRead\":\"1\"}}";
+        }
+        stubChatlist(sessions);
+        when(commandService.requestResume(any(), anyString(), any(), any()))
+                .thenReturn(Optional.of(objectMapper.readTree("{\"success\":true,\"confirmed\":true}")));
+
+        chatPollService.pollOnce(account);
+
+        // 默认 ask-batch-limit=5:6 个已读会话只发 5 次索要,第 6 个攒着下轮
+        verify(commandService, times(5)).requestResume(any(), anyString(), any(), any());
+        long requested = java.util.Arrays.stream(records)
+                .filter(r -> "REQUESTED".equals(greetingMapper.selectById(r.getId()).getStatus()))
+                .count();
+        assertEquals(5, requested, "超出预算的候选人应保持 SENT 攒着写入轮");
+    }
+
+    @Test
+    void coolingWindowBlocksAutomaticAsks() throws Exception {
+        Jd jd = confirmedJd("招聘主管", "88888");
+        Candidate candidate = knownCandidate("im1", "张三");
+        candidate.setJdId(jd.getId());
+        candidateMapper.updateById(candidate);
+        GreetingRecord record = greeting(candidate);
+        // 熔断恢复刚发生(冷却窗口内,默认 120 分钟)
+        account.setRiskResetAt(LocalDateTime.now());
+        accountMapper.updateById(account);
+
+        stubChatlist("{\"im_id\":\"im1\",\"direction\":\"0\",\"raw_metadata\":{\"oppositeRead\":\"1\"}}");
+
+        chatPollService.pollOnce(account);
+
+        verify(commandService, never()).requestResume(any(), anyString(), any(), any());
+        assertEquals("SENT", greetingMapper.selectById(record.getId()).getStatus(), "冷却期内自动索要应攒着");
+    }
+
     // ---------- 辅助 ----------
 
     private void stubChatlist(String... sessions) throws Exception {

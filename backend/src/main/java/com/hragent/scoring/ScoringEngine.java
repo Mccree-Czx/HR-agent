@@ -29,6 +29,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -130,6 +131,14 @@ public class ScoringEngine {
         return record;
     }
 
+    /** 轮内简历详情读取总预算(跨岗位;beginRound 重置;默认不限,兼容未调用 beginRound 的单次场景;2026-09-28) */
+    private final AtomicInteger roundReadBudget = new AtomicInteger(Integer.MAX_VALUE);
+
+    /** 轮次开始:重置轮内简历详情读取总预算(读取量是平台足迹大头;由调度器每轮调用,2026-09-28) */
+    public void beginRound() {
+        roundReadBudget.set(Math.max(0, properties.getAutoRecruit().getResumeDetailRoundLimit()));
+    }
+
     /**
      * 批量补评分:遍历该岗位下 pass_status=PENDING 的候选人补齐评分(设计 §3.1(3)、终审 C1/I3)。
      *
@@ -165,11 +174,13 @@ public class ScoringEngine {
                 if (existing != null && !shouldReevaluate(candidate, existing)) {
                     continue;
                 }
-                if (account != null && detailFetches < detailLimit && needsResumeDetail(candidate)) {
+                if (account != null && detailFetches < detailLimit && roundReadBudget.get() > 0
+                        && needsResumeDetail(candidate)) {
                     if (detailFetches > 0 && detailIntervalMillis > 0) {
                         sleep(detailIntervalMillis);
                     }
                     detailFetches++;
+                    roundReadBudget.decrementAndGet();
                     enrichFromResumeDetail(account, candidate);
                 }
                 scoringExecutor.scoreInNewTransaction(candidate.getId());

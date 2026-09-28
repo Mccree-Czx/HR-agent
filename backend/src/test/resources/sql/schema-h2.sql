@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS liepin_account (
     circuit_breaker  TINYINT NOT NULL DEFAULT 0,
     greet_mode       VARCHAR(20) NOT NULL DEFAULT 'AUTO',
     daily_greet_quota INT NOT NULL DEFAULT 50,
+    risk_reset_at    TIMESTAMP,
     created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

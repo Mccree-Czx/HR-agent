@@ -4,11 +4,13 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hragent.config.HrAgentProperties;
 import com.hragent.entity.AppSetting;
+import com.hragent.entity.LiepinAccount;
 import com.hragent.repository.AppSettingMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Optional;
 
@@ -61,6 +63,22 @@ public class AutoRecruitSettingService {
             return false;
         }
         return "true".equals(value);
+    }
+
+    /**
+     * 熔断恢复后的冷却窗口判定(2026-09-28):重置/扫码恢复后 {@code riskCooldownMinutes} 分钟内视为冷却——
+     * 暂停主动外发,轮次先轻探测确认平台已恢复,避免"重置即全速重撞"。
+     * 未配置恢复时刻(如手动 SQL 重置未写 risk_reset_at)或窗口≤0 时返回 false。
+     */
+    public boolean isCoolingDown(LiepinAccount account) {
+        if (account == null || account.getRiskResetAt() == null) {
+            return false;
+        }
+        int minutes = properties.getAutoRecruit().getRiskCooldownMinutes();
+        if (minutes <= 0) {
+            return false;
+        }
+        return Duration.between(account.getRiskResetAt(), LocalDateTime.now()).toMinutes() < minutes;
     }
 
     /** 设置开关(存库持久化 + 审计日志,操作人取 UserContext) */

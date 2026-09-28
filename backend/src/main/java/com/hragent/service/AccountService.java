@@ -9,6 +9,8 @@ import com.hragent.repository.LiepinAccountMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
+
 @Service
 public class AccountService {
 
@@ -48,8 +50,12 @@ public class AccountService {
 
     @Transactional
     public LiepinAccount update(Long id, LiepinAccount account) {
-        get(id);
+        LiepinAccount existing = get(id);
         account.setId(id);
+        // 熔断恢复(重置):记录恢复时刻,供调度器冷却窗口判断(2026-09-28;手动 SQL 重置需自行写 risk_reset_at)
+        if (Boolean.TRUE.equals(existing.getCircuitBreaker()) && Boolean.FALSE.equals(account.getCircuitBreaker())) {
+            account.setRiskResetAt(LocalDateTime.now());
+        }
         accountMapper.updateById(account);
         opLogService.log("UPDATE", "account", id, "更新猎聘账号: " + account.getName());
         return get(id);

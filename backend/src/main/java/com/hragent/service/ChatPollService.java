@@ -130,6 +130,7 @@ public class ChatPollService {
      */
     public int pollOnce(LiepinAccount account) {
         Duration timeout = Duration.ofMinutes(properties.getLiepin().getShortTimeoutMinutes());
+        asksThisPoll = 0; // 轮内索要预算重置(2026-09-28 熔断治理)
         List<JsonNode> sessions = fetchSessionsWithRetry(account, timeout);
         if (sessions == null) {
             return 0;
@@ -153,6 +154,31 @@ public class ChatPollService {
             }
         }
         return processed;
+    }
+
+    /**
+     * 轮内自动索要预算(2026-09-28 熔断治理):每轮最多 {@code askBatchLimit} 次自动索要,
+     * 用尽则攒着下轮继续——与 60s 账号级外发间隔共同压低平台可见密度。
+     */
+    private int asksThisPoll;
+
+    /**
+     * 轻探测:仅拉一次会话列表,确认平台是否已恢复(被跳验证页会抛风控异常,由调用方停止本轮)。
+     * 熔断恢复冷却期内使用,避免"重置即全速重撞"。
+     */
+    public void probeAccount(LiepinAccount account, Duration timeout) {
+        commandService.chatlist(account, timeout);
+    }
+
+    /** 消耗一次轮内索要预算;预算用尽返回 false(调用方跳过并攒着) */
+    private boolean tryConsumeAskBudget() {
+        int limit = Math.max(0, properties.getAutoRecruit().getAskBatchLimit());
+        if (asksThisPoll >= limit) {
+            log.info("本轮自动索要已达上限 {}(熔断治理),暂停索要攒着,下轮继续", limit);
+            return false;
+        }
+        asksThisPoll++;
+        return true;
     }
 
     /**
@@ -319,8 +345,11 @@ public class ChatPollService {
 
     /** 已读即索要:记录/评分/门槛前置检查 → 账号节流 → 直接索要(不检测回复,复用既有守卫) */
     private boolean requestResumeOnRead(LiepinAccount account, Candidate candidate) {
-        if (!settingService.isEnabled()) {
-            log.info("自动外发已关闭,跳过已读索要(攒着,开关恢复后补做),候选人 {}", candidate.getId());
+        if (!settingService.isEnabled() || settingService.isCoolingDown(account)) {
+            log.info("自动外发已暂停(开关关闭或熔断冷却中),跳过已读索要(攒着后补),候选人 {}", candidate.getId());
+            return false;
+        }
+        if (!tryConsumeAskBudget()) {
             return false;
         }
         GreetingRecord record = greetingMapper.selectOne(new LambdaQueryWrapper<GreetingRecord>()
@@ -404,8 +433,11 @@ public class ChatPollService {
 
     /** 已知候选人仅文本回复:门槛已确认 + 评分 PASS + 未 REQUESTED → 复用既有索要路径 */
     private boolean requestResumeForKnown(LiepinAccount account, Candidate candidate, Duration timeout) {
-        if (!settingService.isEnabled()) {
-            log.info("自动外发已关闭,跳过回复索要(攒着,开关恢复后补做),候选人 {}", candidate.getId());
+        if (!settingService.isEnabled() || settingService.isCoolingDown(account)) {
+            log.info("自动外发已暂停(开关关闭或熔断冷却中),跳过回复索要(攒着后补),候选人 {}", candidate.getId());
+            return false;
+        }
+        if (!tryConsumeAskBudget()) {
             return false;
         }
         if (!"PASS".equals(candidate.getPassStatus())) {
@@ -515,8 +547,11 @@ public class ChatPollService {
 
     /** 陌生来话评分后:仅 PASS 且门槛已确认才索要(否则保持待处理);运行时开关关闭时跳过攒着 */
     private void maybeRequestAfterStrangerScore(LiepinAccount account, Long candidateId, Duration timeout) {
-        if (!settingService.isEnabled()) {
-            log.info("自动外发已关闭,跳过陌生来话索要(攒着,开关恢复后补做),候选人 {}", candidateId);
+        if (!settingService.isEnabled() || settingService.isCoolingDown(account)) {
+            log.info("自动外发已暂停(开关关闭或熔断冷却中),跳过陌生来话索要(攒着后补),候选人 {}", candidateId);
+            return;
+        }
+        if (!tryConsumeAskBudget()) {
             return;
         }
         Candidate fresh = candidateMapper.selectById(candidateId);
