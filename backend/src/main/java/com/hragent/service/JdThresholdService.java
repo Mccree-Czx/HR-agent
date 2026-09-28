@@ -1,6 +1,7 @@
 package com.hragent.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.hragent.ai.AgentSkillLoader;
 import com.hragent.ai.AiClient;
 import com.hragent.common.BizException;
 import com.hragent.entity.Jd;
@@ -23,17 +24,17 @@ import java.time.LocalDateTime;
 @Service
 public class JdThresholdService {
 
-    private static final String SYSTEM_PROMPT =
-            "你是资深招聘顾问,请依据岗位 JD 与薪资预算给出一个合理的简历评分通过门槛(1-100 的整数)及理由。\n"
-                    + "只输出一个 JSON 对象,不要输出任何其他文字,结构如下:\n"
-                    + "{\"threshold\": 0, \"reason\": \"不超过 50 字的理由\"}\n";
+    /** 门槛建议技能名(AgentScope 技能包 agents/skills/jd-threshold-suggest/SKILL.md,2026-09-28 由常量迁移) */
+    private static final String THRESHOLD_SKILL = "jd-threshold-suggest";
 
     private final JdMapper jdMapper;
     private final AiClient aiClient;
+    private final AgentSkillLoader skillLoader;
 
-    public JdThresholdService(JdMapper jdMapper, AiClient aiClient) {
+    public JdThresholdService(JdMapper jdMapper, AiClient aiClient, AgentSkillLoader skillLoader) {
         this.jdMapper = jdMapper;
         this.aiClient = aiClient;
+        this.skillLoader = skillLoader;
     }
 
     /** 依据 JD 生成建议门槛并落库 threshold_suggestion,返回建议文本(不构成确认) */
@@ -42,7 +43,7 @@ public class JdThresholdService {
         Jd jd = requireJd(jdId);
         String output;
         try {
-            output = aiClient.chat(SYSTEM_PROMPT, buildUserPrompt(jd));
+            output = aiClient.chat(skillLoader.load(THRESHOLD_SKILL).systemPrompt(), buildUserPrompt(jd));
         } catch (Exception e) {
             log.warn("岗位 {} 门槛建议 AI 调用失败: {}", jdId, e.getMessage());
             throw BizException.badRequest("门槛建议生成失败: " + e.getMessage());

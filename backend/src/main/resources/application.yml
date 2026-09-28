@@ -34,6 +34,8 @@ hr-agent:
     base-url: ${AI_BASE_URL:https://api.deepseek.com}
     api-key: ${AI_API_KEY:}
     model: ${AI_MODEL:deepseek-chat}
+    # AgentScope 技能包根目录(agents/skills/<技能名>/SKILL.md;三处 AI 提示词静态注入源,2026-09-28)
+    skill-base-dir: ${AI_SKILL_BASE_DIR:agents/skills}
   notify:
     # 飞书自定义机器人 webhook(留空则仅日志告警;开启加签时同步配置 secret)
     feishu-webhook: ${FEISHU_WEBHOOK:}

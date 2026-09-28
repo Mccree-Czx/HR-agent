@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.hragent.ai.AgentSkillLoader;
 import com.hragent.ai.AiClient;
 import com.hragent.common.BizException;
 import com.hragent.config.HrAgentProperties;
@@ -20,8 +21,6 @@ import com.hragent.repository.ScoreRecordMapper;
 import com.hragent.service.LiepinCommandService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Lazy;
-import org.springframework.core.io.Resource;
-import org.springframework.core.io.ResourceLoader;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -43,7 +42,7 @@ import java.util.regex.Pattern;
  * 评分引擎(可插拔):
  * 0. 期望职能三态门禁:不匹配直接 FAIL / 待确认置 PENDING(均不调模型,省 token 且 fail-closed)
  * 1. 规则预筛:硬性过滤(如薪资远超预算)直接 FAIL,不调模型省 token(评审 P2-11)
- * 2. 评分 Agent:系统提示词(agents/resume-scorer.md,细则占位)+ JD/候选人快照 → 结构化 JSON
+ * 2. 评分 Agent:系统提示词(AgentScope 技能包 agents/skills/resume-scoring/SKILL.md,细则占位)+ JD/候选人快照 → 结构化 JSON
  * 3. 解析 + 字段校验 + 失败重试(评审 P2-11)
  */
 @Slf4j
@@ -73,14 +72,14 @@ public class ScoringEngine {
     private final ScoreRecordMapper scoreRecordMapper;
     private final CandidateMapper candidateMapper;
     private final JdMapper jdMapper;
-    private final ResourceLoader resourceLoader;
+    private final AgentSkillLoader skillLoader;
     private final LiepinAccountMapper accountMapper;
     private final LiepinCommandService commandService;
     private final CandidateScoringExecutor scoringExecutor;
 
     public ScoringEngine(AiClient aiClient, HrAgentProperties properties,
                          ScoreRecordMapper scoreRecordMapper, CandidateMapper candidateMapper,
-                         JdMapper jdMapper, ResourceLoader resourceLoader,
+                         JdMapper jdMapper, AgentSkillLoader skillLoader,
                          LiepinAccountMapper accountMapper, LiepinCommandService commandService,
                          @Lazy CandidateScoringExecutor scoringExecutor) {
         this.aiClient = aiClient;
@@ -88,7 +87,7 @@ public class ScoringEngine {
         this.scoreRecordMapper = scoreRecordMapper;
         this.candidateMapper = candidateMapper;
         this.jdMapper = jdMapper;
-        this.resourceLoader = resourceLoader;
+        this.skillLoader = skillLoader;
         this.accountMapper = accountMapper;
         this.commandService = commandService;
         this.scoringExecutor = scoringExecutor;
@@ -574,13 +573,9 @@ public class ScoringEngine {
         return sb.toString();
     }
 
+    /** 评分技能正文作 systemPrompt(AgentScope 技能包 agents/skills/<skillName>/SKILL.md,2026-09-28 迁移) */
     private String loadPrompt() {
-        try {
-            Resource resource = resourceLoader.getResource(properties.getScoring().getPromptFile());
-            return new String(resource.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-        } catch (Exception e) {
-            throw new IllegalStateException("评分提示词加载失败: " + properties.getScoring().getPromptFile(), e);
-        }
+        return skillLoader.load(properties.getScoring().getSkillName()).systemPrompt();
     }
 
     private String abbreviate(String s) {

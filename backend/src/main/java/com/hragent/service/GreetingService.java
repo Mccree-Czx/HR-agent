@@ -2,6 +2,7 @@ package com.hragent.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.hragent.ai.AgentSkillLoader;
 import com.hragent.ai.AiClient;
 import com.hragent.config.HrAgentProperties;
 import com.hragent.entity.Candidate;
@@ -14,12 +15,9 @@ import com.hragent.repository.GreetingRecordMapper;
 import com.hragent.repository.JdMapper;
 import com.hragent.repository.LiepinAccountMapper;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.core.io.Resource;
-import org.springframework.core.io.ResourceLoader;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
@@ -37,6 +35,9 @@ import java.util.List;
 @Service
 public class GreetingService {
 
+    /** 打招呼话术技能名(AgentScope 技能包 agents/skills/greeting-writing/SKILL.md,2026-09-28 由提示词文件迁移) */
+    private static final String GREETING_SKILL = "greeting-writing";
+
     private final GreetingRecordMapper greetingMapper;
     private final CandidateMapper candidateMapper;
     private final LiepinAccountMapper accountMapper;
@@ -44,13 +45,13 @@ public class GreetingService {
     private final LiepinCommandService commandService;
     private final AiClient aiClient;
     private final HrAgentProperties properties;
-    private final ResourceLoader resourceLoader;
+    private final AgentSkillLoader skillLoader;
     private final AccountPaceGuard paceGuard;
 
     public GreetingService(GreetingRecordMapper greetingMapper, CandidateMapper candidateMapper,
                            LiepinAccountMapper accountMapper, JdMapper jdMapper,
                            LiepinCommandService commandService,
-                           AiClient aiClient, HrAgentProperties properties, ResourceLoader resourceLoader,
+                           AiClient aiClient, HrAgentProperties properties, AgentSkillLoader skillLoader,
                            AccountPaceGuard paceGuard) {
         this.greetingMapper = greetingMapper;
         this.candidateMapper = candidateMapper;
@@ -59,7 +60,7 @@ public class GreetingService {
         this.commandService = commandService;
         this.aiClient = aiClient;
         this.properties = properties;
-        this.resourceLoader = resourceLoader;
+        this.skillLoader = skillLoader;
         this.paceGuard = paceGuard;
     }
 
@@ -225,12 +226,8 @@ public class GreetingService {
         return last.getCreatedAt().atZone(ZoneId.systemDefault()).toInstant();
     }
 
+    /** 话术技能正文作 systemPrompt(AgentScope 技能包 agents/skills/greeting-writing/SKILL.md,2026-09-28 迁移) */
     private String loadPrompt() {
-        try {
-            Resource resource = resourceLoader.getResource("classpath:agents/greeting-writer.md");
-            return new String(resource.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-        } catch (Exception e) {
-            throw new IllegalStateException("话术提示词加载失败", e);
-        }
+        return skillLoader.load(GREETING_SKILL).systemPrompt();
     }
 }

@@ -72,6 +72,9 @@ public class HrAgentProperties {
 
         /** 单次调用超时(秒) */
         private int timeoutSeconds = 120;
+
+        /** AgentScope 技能包根目录(classpath 相对路径;agents/skills/<技能名>/SKILL.md,2026-09-28) */
+        private String skillBaseDir = "agents/skills";
     }
 
     @Data
@@ -83,8 +86,8 @@ public class HrAgentProperties {
         /** 通过阈值(0-100) */
         private int passThreshold = 60;
 
-        /** 评分 Agent 系统提示词文件 */
-        private String promptFile = "classpath:agents/resume-scorer.md";
+        /** 评分技能名(AgentScope 技能包 agents/skills/<name>/SKILL.md;2026-09-28 由提示词文件迁移) */
+        private String skillName = "resume-scoring";
 
         /** JSON 解析失败最大重试次数 */
         private int maxParseRetry = 2;
