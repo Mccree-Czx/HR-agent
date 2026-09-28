@@ -126,17 +126,17 @@ public class HrAgentProperties {
         /** 自动外发开关的首次种子(仅当 app_setting 中无值时生效;之后完全由界面开关控制,见 AutoRecruitSettingService) */
         private boolean enabled = false;
 
-        /** 单轮单岗位打招呼上限(2026-09-28 熔断治理降档:50→15,与 60s 外发间隔共同压低密度) */
-        private int greetBatchLimit = 15;
+        /** 单轮单岗位打招呼上限(2026-09-28 晚工作量翻倍:15→30,与 60s 外发间隔共同压低密度) */
+        private int greetBatchLimit = 30;
 
-        /** 单轮自动索要上限(索要预算;2026-09-28 熔断治理新增) */
-        private int askBatchLimit = 5;
+        /** 单轮自动索要上限(索要预算;2026-09-28 晚工作量翻倍:5→10) */
+        private int askBatchLimit = 10;
 
-        /** 单轮「在线简历详情」读取上限(只读平台调用,与推荐批次同量级,默认 10;2026-09-28 由 20 下调) */
-        private int resumeDetailBatchLimit = 10;
+        /** 单轮「在线简历详情」读取上限(只读平台调用;2026-09-28 晚工作量翻倍:10→20) */
+        private int resumeDetailBatchLimit = 20;
 
-        /** 轮内简历详情读取总预算(跨岗位合计;读取量是平台足迹大头,2026-09-28 新增) */
-        private int resumeDetailRoundLimit = 30;
+        /** 轮内简历详情读取总预算(跨岗位合计;2026-09-28 晚工作量翻倍:30→60) */
+        private int resumeDetailRoundLimit = 60;
 
         /** 相邻两次简历详情读取的最小间隔(毫秒,读操作轻节流,默认 2000;2026-09-28 由 1000 下调速率) */
         private int resumeDetailIntervalMillis = 2000;

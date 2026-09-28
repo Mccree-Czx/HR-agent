@@ -649,9 +649,9 @@ class ChatPollServiceTest {
     @Test
     void askBudgetCapsAutomaticAsksPerPoll() throws Exception {
         Jd jd = confirmedJd("招聘主管", "88888");
-        GreetingRecord[] records = new GreetingRecord[6];
-        String[] sessions = new String[6];
-        for (int i = 1; i <= 6; i++) {
+        GreetingRecord[] records = new GreetingRecord[11];
+        String[] sessions = new String[11];
+        for (int i = 1; i <= 11; i++) {
             Candidate candidate = knownCandidate("im" + i, "候选" + i);
             candidate.setJdId(jd.getId());
             candidateMapper.updateById(candidate);
@@ -664,12 +664,12 @@ class ChatPollServiceTest {
 
         chatPollService.pollOnce(account);
 
-        // 默认 ask-batch-limit=5:6 个已读会话只发 5 次索要,第 6 个攒着下轮
-        verify(commandService, times(5)).requestResume(any(), anyString(), any(), any());
+        // 默认 ask-batch-limit=10:11 个已读会话只发 10 次索要,第 11 个攒着下轮
+        verify(commandService, times(10)).requestResume(any(), anyString(), any(), any());
         long requested = java.util.Arrays.stream(records)
                 .filter(r -> "REQUESTED".equals(greetingMapper.selectById(r.getId()).getStatus()))
                 .count();
-        assertEquals(5, requested, "超出预算的候选人应保持 SENT 攒着写入轮");
+        assertEquals(10, requested, "超出预算的候选人应保持 SENT 攒着写入轮");
     }
 
     @Test

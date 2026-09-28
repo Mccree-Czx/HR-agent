@@ -23,7 +23,7 @@
 
 ### 3.1 节拍循环(`AutoRecruitScheduler`)
 
-- 单元优先级:①会话处理 ②会话列表刷新(≥`poll-list-interval-minutes`) ③打招呼(≤`greet-batch-limit`/岗,发送节奏由 AccountPaceGuard 60s 保证) ④简历读取(轮 30/岗 10 预算,`ScoringEngine.scoreNext(jd,1)` 分片) ⑤推荐创建(≥`recommend-gap-minutes`,防创建扎堆)
+- 单元优先级:①会话处理 ②会话列表刷新(≥`poll-list-interval-minutes`) ③打招呼(≤`greet-batch-limit`/岗,发送节奏由 AccountPaceGuard 60s 保证) ④简历读取(轮 60/岗 20 预算,`ScoringEngine.scoreNext(jd,1)` 分片) ⑤推荐创建(≥`recommend-gap-minutes`,防创建扎堆)
 - 全部墙钟判定;睡眠分段 ≤60s(睡醒/重启后越过 :50 立即收尾并记录 `abandoned` 单元数);工作全部消费且窗口内无后续刷新点时可提前收尾
 - 统计/摘要/轮次历史沿用(时长自然反映约 50 分钟)
 
