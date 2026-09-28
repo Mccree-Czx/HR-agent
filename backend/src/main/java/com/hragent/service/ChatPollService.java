@@ -531,8 +531,11 @@ public class ChatPollService {
         if (resumeId == null || resumeId.isBlank()) {
             return;
         }
+        // 对方 im_id 从候选人快照取(resume-view 响应不含 im 字段,askfor 接口必需)
+        JsonNode snapshot = JsonExtractor.parse(fresh.getSnapshot()).orElse(null);
+        String oppositeImId = snapshot == null ? "" : snapshot.path("im_id").asText("");
         paceGuard.await(account);
-        Optional<JsonNode> result = commandService.requestResume(account, resumeId, timeout);
+        Optional<JsonNode> result = commandService.requestResume(account, resumeId, oppositeImId, timeout);
         boolean confirmed = result.filter(node -> node.path("success").asBoolean(false)
                 && node.path("confirmed").asBoolean(false)).isPresent();
         if (confirmed) {

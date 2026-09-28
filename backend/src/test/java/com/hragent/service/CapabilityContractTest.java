@@ -113,7 +113,7 @@ class CapabilityContractTest {
     private void replyAndResult(String result) throws Exception {
         when(executor.execute(eq(account), any(), eq("chatlist"), eq("--limit"), eq("100"), eq("--json")))
                 .thenReturn(new CliResult(0, "[{\"im_id\":\"im-mock-1\",\"direction\":\"1\"}]", "", false));
-        when(executor.execute(eq(account), any(), eq("request-resume"), anyString(), eq("--json")))
+        when(executor.execute(eq(account), any(), eq("request-resume"), anyString(), eq("--imId"), anyString(), eq("--json")))
                 .thenReturn(new CliResult(0, result, "", false));
     }
 
@@ -122,7 +122,7 @@ class CapabilityContractTest {
         replyAndResult("{\"success\":true,\"confirmed\":true}");
         GreetingRecord r = record();
         collect.collectOne(r, candidate());
-        verify(executor).execute(eq(account), any(), eq("request-resume"), eq("resume-mock-1"), eq("--json"));
+        verify(executor).execute(eq(account), any(), eq("request-resume"), eq("resume-mock-1"), eq("--imId"), eq("im-mock-1"), eq("--json"));
         assertEquals("REQUESTED", r.getStatus());
     }
 
@@ -132,18 +132,30 @@ class CapabilityContractTest {
         Candidate c = candidate();
         c.setResumeId(null);
         collect.collectOne(record(), c);
-        verify(executor, never()).execute(eq(account), any(), eq("request-resume"), anyString(), eq("--json"));
+        verify(executor, never()).execute(eq(account), any(), eq("request-resume"), anyString(), eq("--imId"), anyString(), eq("--json"));
         verifyNoInteractions(greetings);
     }
 
     @Test
-    void rejectedOrUnconfirmedRequestDoesNotBecomeRequested() throws Exception {
-        for (String result : new String[]{"{}", "{\"success\":false}", "{\"success\":true,\"confirmed\":false}"}) {
+    void rejectedRequestDoesNotBecomeRequested() throws Exception {
+        for (String result : new String[]{"{}", "{\"success\":false}"}) {
             replyAndResult(result);
             GreetingRecord r = record();
             collect.collectOne(r, candidate());
             assertEquals("SENT", r.getStatus());
         }
         verifyNoInteractions(greetings);
+    }
+
+    @Test
+    void unconfirmedButAcceptedRequestKeepsSentAndRecordsAttempt() throws Exception {
+        // 2026-09-27 新语义: 接口已受理即记尝试(24h 防重复),但状态保守不置 REQUESTED
+        replyAndResult("{\"success\":true,\"confirmed\":false}");
+        GreetingRecord r = record();
+        collect.collectOne(r, candidate());
+        assertEquals("SENT", r.getStatus(), "未回显确认时状态保守不变");
+        assertEquals(1, r.getResumeRequestCount(), "接口受理即记录尝试");
+        assertNotNull(r.getResumeRequestedAt());
+        verify(greetings).updateById(r);
     }
 }

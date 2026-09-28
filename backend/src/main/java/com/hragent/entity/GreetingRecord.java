@@ -24,6 +24,12 @@ public class GreetingRecord {
     /** 附件探测标记:已探测的会话最新消息 ID(同一消息不重复探测;NULL=从未探测) */
     private String attachProbeMsgId;
 
+    /** 最近一次索要简历时间(NULL=从未索要;防重复:24h 窗口内不重复请求) */
+    private LocalDateTime resumeRequestedAt;
+
+    /** 索要简历尝试次数(含接口受理但未回显确认的尝试;上限 2 次后仅等对方自发附件) */
+    private Integer resumeRequestCount;
+
     private String message;
 
     private String status;

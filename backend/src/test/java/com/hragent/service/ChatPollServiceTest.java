@@ -149,7 +149,7 @@ class ChatPollServiceTest {
         assertTrue(storageService.exists(files.get(0).getObjectKey()), "附件应写入存储");
         verify(commandService).attachFetch(any(), eq("im1"), anyString(), any());
         assertEquals("m-100", greetingMapper.selectById(record.getId()).getAttachProbeMsgId(), "探测成功后应写消息级标记");
-        verify(commandService, never()).requestResume(any(), anyString(), any());
+        verify(commandService, never()).requestResume(any(), anyString(), any(), any());
         assertFalse(Files.exists(pdf), "下载临时文件应清理");
     }
 
@@ -189,13 +189,13 @@ class ChatPollServiceTest {
 
         stubChatlist("{\"im_id\":\"im1\",\"direction\":\"1\",\"raw_metadata\":{\"latestMsgId\":\"m-100\"}}");
         stubChatmsg("im1", "{\"payload\":{\"bodies\":[{\"type\":\"txt\",\"msg\":\"您好\"}]}}");
-        when(commandService.requestResume(any(), eq("r-im1"), any()))
+        when(commandService.requestResume(any(), eq("r-im1"), any(), any()))
                 .thenReturn(Optional.of(objectMapper.readTree("{\"success\":true,\"confirmed\":true}")));
 
         chatPollService.pollOnce(account);
 
         verify(commandService, never()).attachFetch(any(), anyString(), anyString(), any());
-        verify(commandService).requestResume(any(), eq("r-im1"), any()); // 防抖不阻塞"回复索要"
+        verify(commandService).requestResume(any(), eq("r-im1"), any(), any()); // 防抖不阻塞"回复索要"
     }
 
     @Test
@@ -230,7 +230,7 @@ class ChatPollServiceTest {
 
         chatPollService.pollOnce(account);
 
-        verify(commandService, never()).requestResume(any(), anyString(), any());
+        verify(commandService, never()).requestResume(any(), anyString(), any(), any());
         assertEquals("SENT", greetingMapper.selectById(record.getId()).getStatus(), "未确认门槛不得改状态");
     }
 
@@ -246,12 +246,12 @@ class ChatPollServiceTest {
 
         stubChatlist("{\"im_id\":\"im1\",\"user_id\":\"u1\",\"direction\":\"1\"}");
         stubChatmsg("im1", "{\"payload\":{\"bodies\":[{\"type\":\"txt\",\"msg\":\"您好\"}]}}");
-        when(commandService.requestResume(any(), eq("r-im1"), any()))
+        when(commandService.requestResume(any(), eq("r-im1"), any(), any()))
                 .thenReturn(Optional.of(objectMapper.readTree("{\"success\":true,\"confirmed\":true}")));
 
         chatPollService.pollOnce(account);
 
-        verify(commandService).requestResume(any(), eq("r-im1"), any());
+        verify(commandService).requestResume(any(), eq("r-im1"), any(), any());
         assertEquals("REQUESTED", greetingMapper.selectById(record.getId()).getStatus());
     }
 
@@ -294,7 +294,7 @@ class ChatPollServiceTest {
         assertEquals("enres-2", created.get(0).getResumeId());
         assertNull(created.get(0).getJdId(), "无关联岗位 → 待分配(jdId 为空)");
         assertEquals(0, scoreRecordMapper.selectCount(new LambdaQueryWrapper<>()), "无岗位不评分");
-        verify(commandService, never()).requestResume(any(), anyString(), any());
+        verify(commandService, never()).requestResume(any(), anyString(), any(), any());
     }
 
     // ---------- 陌生来话:提取失败 → 不建/不猜/不评分 ----------
@@ -309,7 +309,7 @@ class ChatPollServiceTest {
         assertEquals(0, processed);
         assertEquals(0, candidateMapper.selectCount(new LambdaQueryWrapper<>()), "提取失败不猜测,不建候选人");
         assertEquals(0, scoreRecordMapper.selectCount(new LambdaQueryWrapper<>()), "不调用评分");
-        verify(commandService, never()).requestResume(any(), anyString(), any());
+        verify(commandService, never()).requestResume(any(), anyString(), any(), any());
     }
 
     // ---------- 风控异常 → 上抛中断本轮 ----------
@@ -393,7 +393,7 @@ class ChatPollServiceTest {
         assertEquals(1, resumeFileMapper.selectCount(new LambdaQueryWrapper<ResumeFile>()
                 .eq(ResumeFile::getCandidateId, c.getId())), "附件应入库");
         assertEquals(0, scoreRecordMapper.selectCount(new LambdaQueryWrapper<>()), "占位候选不评分");
-        verify(commandService, never()).requestResume(any(), anyString(), any());
+        verify(commandService, never()).requestResume(any(), anyString(), any(), any());
     }
 
     @Test
@@ -449,7 +449,7 @@ class ChatPollServiceTest {
         when(commandService.attachFetch(any(), eq("imB"), anyString(), any()))
                 .thenReturn(Optional.of(objectMapper.readTree("{\"found\":false,\"success\":false,\"reason\":\"no-attachment\"}")));
         stubChatmsg("imB", "{\"sender\":\"对方\",\"payload\":{\"bodies\":[{\"type\":\"txt\",\"msg\":\"您好\"}]}}");
-        when(commandService.requestResume(any(), eq("r-imB"), any()))
+        when(commandService.requestResume(any(), eq("r-imB"), any(), any()))
                 .thenReturn(Optional.of(objectMapper.readTree("{\"success\":true,\"confirmed\":true}")));
 
         chatPollService.pollOnce(account);
@@ -479,12 +479,12 @@ class ChatPollServiceTest {
 
         stubChatlist("{\"im_id\":\"imX\",\"user_id\":\"u1\",\"direction\":\"1\"}");
         stubChatmsg("imX", "{\"payload\":{\"bodies\":[{\"type\":\"txt\",\"msg\":\"您好\"}]}}");
-        when(commandService.requestResume(any(), eq("r-u1"), any()))
+        when(commandService.requestResume(any(), eq("r-u1"), any(), any()))
                 .thenReturn(Optional.of(objectMapper.readTree("{\"success\":true,\"confirmed\":true}")));
 
         chatPollService.pollOnce(account);
 
-        verify(commandService).requestResume(any(), eq("r-u1"), any());
+        verify(commandService).requestResume(any(), eq("r-u1"), any(), any());
         assertEquals("REQUESTED", greetingMapper.selectById(record.getId()).getStatus());
         assertEquals(1, candidateMapper.selectCount(new LambdaQueryWrapper<>()),
                 "user_id 回退命中已知候选人,不得误建陌生候选人");
@@ -502,13 +502,13 @@ class ChatPollServiceTest {
 
         // 对方沉默(direction=0),但已读我方最新消息
         stubChatlist("{\"im_id\":\"im1\",\"direction\":\"0\",\"raw_metadata\":{\"oppositeRead\":\"1\"}}");
-        when(commandService.requestResume(any(), eq("r-im1"), any()))
+        when(commandService.requestResume(any(), eq("r-im1"), any(), any()))
                 .thenReturn(Optional.of(objectMapper.readTree("{\"success\":true,\"confirmed\":true}")));
 
         int processed = chatPollService.pollOnce(account);
 
         assertEquals(1, processed, "已读触发索要应计为已处理");
-        verify(commandService).requestResume(any(), eq("r-im1"), any());
+        verify(commandService).requestResume(any(), eq("r-im1"), any(), any());
         assertEquals("REQUESTED", greetingMapper.selectById(record.getId()).getStatus());
         verify(commandService, never()).chatmsg(any(), anyString(), any());
     }
@@ -528,7 +528,7 @@ class ChatPollServiceTest {
         stubChatlist("{\"im_id\":\"im1\",\"direction\":\"0\",\"raw_metadata\":{\"oppositeRead\":\"0\"}}");
         chatPollService.pollOnce(account);
 
-        verify(commandService, never()).requestResume(any(), anyString(), any());
+        verify(commandService, never()).requestResume(any(), anyString(), any(), any());
         assertEquals("SENT", greetingMapper.selectById(record.getId()).getStatus());
     }
 
@@ -543,7 +543,7 @@ class ChatPollServiceTest {
         stubChatlist("{\"im_id\":\"im1\",\"direction\":\"0\",\"raw_metadata\":{\"oppositeRead\":\"1\"}}");
         chatPollService.pollOnce(account);
 
-        verify(commandService, never()).requestResume(any(), anyString(), any());
+        verify(commandService, never()).requestResume(any(), anyString(), any(), any());
         assertEquals("SENT", greetingMapper.selectById(record.getId()).getStatus(), "未确认门槛不得改状态");
     }
 
@@ -560,7 +560,7 @@ class ChatPollServiceTest {
         stubChatlist("{\"im_id\":\"im1\",\"direction\":\"0\",\"raw_metadata\":{\"oppositeRead\":\"1\"}}");
         chatPollService.pollOnce(account);
 
-        verify(commandService, never()).requestResume(any(), anyString(), any());
+        verify(commandService, never()).requestResume(any(), anyString(), any(), any());
     }
 
     // ---------- 运行时开关关闭(只停主动外发):索要攒着,附件照常收集 ----------
@@ -578,7 +578,7 @@ class ChatPollServiceTest {
 
         int processed = chatPollService.pollOnce(account);
 
-        verify(commandService, never()).requestResume(any(), anyString(), any());
+        verify(commandService, never()).requestResume(any(), anyString(), any(), any());
         assertEquals("SENT", greetingMapper.selectById(record.getId()).getStatus(), "攒着:状态不得回写");
         assertEquals(0, processed);
     }
@@ -597,7 +597,7 @@ class ChatPollServiceTest {
 
         int processed = chatPollService.pollOnce(account);
 
-        verify(commandService, never()).requestResume(any(), anyString(), any());
+        verify(commandService, never()).requestResume(any(), anyString(), any(), any());
         assertEquals("SENT", greetingMapper.selectById(record.getId()).getStatus(), "攒着:状态不得回写");
         assertEquals(0, processed);
     }
@@ -635,13 +635,13 @@ class ChatPollServiceTest {
                 .thenThrow(new CliException(CliException.Type.TIMEOUT, "liepin-cli 执行超时(account=1)"))
                 .thenReturn(List.of(objectMapper.readTree(
                         "{\"im_id\":\"im1\",\"direction\":\"0\",\"raw_metadata\":{\"oppositeRead\":\"1\"}}")));
-        when(commandService.requestResume(any(), eq("r-im1"), any()))
+        when(commandService.requestResume(any(), eq("r-im1"), any(), any()))
                 .thenReturn(Optional.of(objectMapper.readTree("{\"success\":true,\"confirmed\":true}")));
 
         chatPollService.pollOnce(account);
 
         verify(commandService, times(2)).chatlist(any(), any());
-        verify(commandService).requestResume(any(), eq("r-im1"), any());
+        verify(commandService).requestResume(any(), eq("r-im1"), any(), any());
     }
 
     // ---------- 辅助 ----------

@@ -29,6 +29,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -126,7 +127,7 @@ class ResumeCollectServiceTest {
 
     @Test
     void collectOneRequestsResumeWhenReplied() throws Exception {
-        when(commandService.requestResume(any(), org.mockito.ArgumentMatchers.eq("r1"), any()))
+        when(commandService.requestResume(any(), org.mockito.ArgumentMatchers.eq("r1"), any(), any()))
                 .thenReturn(java.util.Optional.of(objectMapper.readTree("{\"success\":true,\"confirmed\":true}")));
         when(commandService.chatlist(any(LiepinAccount.class), any(Duration.class)))
                 .thenReturn(List.of(objectMapper.readTree(
@@ -134,7 +135,7 @@ class ResumeCollectServiceTest {
 
         resumeCollectService.collectOne(record, candidate);
 
-        verify(commandService).requestResume(any(LiepinAccount.class), org.mockito.ArgumentMatchers.eq("r1"), any(Duration.class));
+        verify(commandService).requestResume(any(LiepinAccount.class), org.mockito.ArgumentMatchers.eq("r1"), any(), any(Duration.class));
         GreetingRecord after = greetingMapper.selectById(record.getId());
         assertEquals("REQUESTED", after.getStatus());
     }
@@ -147,7 +148,7 @@ class ResumeCollectServiceTest {
 
         resumeCollectService.collectOne(record, candidate);
 
-        verify(commandService, never()).requestResume(any(), anyString(), any());
+        verify(commandService, never()).requestResume(any(), anyString(), any(), any());
         assertEquals("SENT", greetingMapper.selectById(record.getId()).getStatus());
     }
 
@@ -180,7 +181,7 @@ class ResumeCollectServiceTest {
 
         resumeCollectService.collectOne(record, candidate);
 
-        verify(commandService, never()).requestResume(any(), anyString(), any());
+        verify(commandService, never()).requestResume(any(), anyString(), any(), any());
         assertEquals("SENT", greetingMapper.selectById(record.getId()).getStatus(), "未确认门 槛不得改状态");
     }
 
@@ -192,7 +193,7 @@ class ResumeCollectServiceTest {
         greetingMapper.updateById(record);
 
         assertFalse(resumeCollectService.requestResumeDirect(account, candidate), "已索要过的记录不得重复触发");
-        verify(commandService, never()).requestResume(any(), anyString(), any());
+        verify(commandService, never()).requestResume(any(), anyString(), any(), any());
     }
 
     @Test
@@ -201,15 +202,82 @@ class ResumeCollectServiceTest {
         candidateMapper.updateById(candidate);
 
         assertFalse(resumeCollectService.requestResumeDirect(account, candidate), "非 PASS 不得索要");
-        verify(commandService, never()).requestResume(any(), anyString(), any());
+        verify(commandService, never()).requestResume(any(), anyString(), any(), any());
     }
 
     @Test
     void requestResumeDirectRequestsAndMarksRequested() throws Exception {
-        when(commandService.requestResume(any(), org.mockito.ArgumentMatchers.eq("r1"), any()))
+        when(commandService.requestResume(any(), org.mockito.ArgumentMatchers.eq("r1"), any(), any()))
                 .thenReturn(java.util.Optional.of(objectMapper.readTree("{\"success\":true,\"confirmed\":true}")));
 
         assertTrue(resumeCollectService.requestResumeDirect(account, candidate));
         assertEquals("REQUESTED", greetingMapper.selectById(record.getId()).getStatus());
+    }
+
+    // ---------- 索要防重复窗口(2026-09-27 新增:24h 窗口 + 次数上限) ----------
+
+    @Test
+    void requestResumeSkipsWithin24Hours() throws Exception {
+        record.setResumeRequestedAt(LocalDateTime.now().minusHours(1));
+        record.setResumeRequestCount(1);
+        greetingMapper.updateById(record);
+        when(commandService.chatlist(any(LiepinAccount.class), any(Duration.class)))
+                .thenReturn(List.of(objectMapper.readTree(
+                        "{\"user_id\":\"u1\",\"im_id\":\"im1\",\"direction\":\"1\"}")));
+
+        resumeCollectService.collectOne(record, candidate);
+
+        verify(commandService, never()).requestResume(any(), anyString(), any(), any());
+        assertEquals("SENT", greetingMapper.selectById(record.getId()).getStatus());
+    }
+
+    @Test
+    void requestResumeSkipsAfterMaxAttempts() throws Exception {
+        record.setResumeRequestedAt(LocalDateTime.now().minusDays(2));
+        record.setResumeRequestCount(2);
+        greetingMapper.updateById(record);
+        when(commandService.chatlist(any(LiepinAccount.class), any(Duration.class)))
+                .thenReturn(List.of(objectMapper.readTree(
+                        "{\"user_id\":\"u1\",\"im_id\":\"im1\",\"direction\":\"1\"}")));
+
+        resumeCollectService.collectOne(record, candidate);
+
+        verify(commandService, never()).requestResume(any(), anyString(), any(), any());
+    }
+
+    @Test
+    void requestResumeRetriesAfter24HoursAndCounts() throws Exception {
+        record.setResumeRequestedAt(LocalDateTime.now().minusHours(25));
+        record.setResumeRequestCount(1);
+        greetingMapper.updateById(record);
+        when(commandService.requestResume(any(), org.mockito.ArgumentMatchers.eq("r1"), any(), any()))
+                .thenReturn(java.util.Optional.of(objectMapper.readTree("{\"success\":true,\"confirmed\":true}")));
+        when(commandService.chatlist(any(LiepinAccount.class), any(Duration.class)))
+                .thenReturn(List.of(objectMapper.readTree(
+                        "{\"user_id\":\"u1\",\"im_id\":\"im1\",\"direction\":\"1\"}")));
+
+        resumeCollectService.collectOne(record, candidate);
+
+        verify(commandService).requestResume(any(LiepinAccount.class), org.mockito.ArgumentMatchers.eq("r1"), any(), any(Duration.class));
+        GreetingRecord after = greetingMapper.selectById(record.getId());
+        assertEquals("REQUESTED", after.getStatus());
+        assertEquals(2, after.getResumeRequestCount());
+        assertNotNull(after.getResumeRequestedAt());
+    }
+
+    @Test
+    void requestResumeRecordsAttemptWhenNotEchoed() throws Exception {
+        when(commandService.requestResume(any(), org.mockito.ArgumentMatchers.eq("r1"), any(), any()))
+                .thenReturn(java.util.Optional.of(objectMapper.readTree("{\"success\":true,\"confirmed\":false}")));
+        when(commandService.chatlist(any(LiepinAccount.class), any(Duration.class)))
+                .thenReturn(List.of(objectMapper.readTree(
+                        "{\"user_id\":\"u1\",\"im_id\":\"im1\",\"direction\":\"1\"}")));
+
+        resumeCollectService.collectOne(record, candidate);
+
+        GreetingRecord after = greetingMapper.selectById(record.getId());
+        assertEquals("SENT", after.getStatus(), "未回显确认时状态保守不变");
+        assertEquals(1, after.getResumeRequestCount(), "接口受理即记录尝试次数");
+        assertNotNull(after.getResumeRequestedAt(), "记录最近请求时间,24h 内不再重复");
     }
 }

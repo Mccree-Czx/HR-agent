@@ -87,6 +87,8 @@ CREATE TABLE IF NOT EXISTS greeting_record (
     account_id   BIGINT NOT NULL COMMENT '执行打招呼的账号',
     liepin_job_id VARCHAR(50) COMMENT '打招呼关联的猎聘职位ID(审计)',
     attach_probe_msg_id VARCHAR(64) COMMENT '附件探测标记:已探测的会话最新消息ID(同消息不重探)',
+    resume_requested_at DATETIME COMMENT '最近一次索要简历时间(防重复:24h窗口+最多次数)',
+    resume_request_count INT NOT NULL DEFAULT 0 COMMENT '索要简历尝试次数(含未回显确认的尝试)',
     message      TEXT COMMENT '打招呼话术',
     status       VARCHAR(20) NOT NULL DEFAULT 'SENT' COMMENT 'SENT/AGREED/NO_RESPONSE',
     mode         VARCHAR(20) NOT NULL COMMENT 'AUTO/MANUAL',

@@ -181,12 +181,15 @@ public class LiepinCommandService {
         return JsonExtractor.parse(result.stdout());
     }
 
-    /** 索要简历(需先 greet 建立会话)→ 输出对象 */
-    public Optional<JsonNode> requestResume(LiepinAccount account, String resumeId, Duration timeout) {
+    /** 索要简历(需先 greet 建立会话)→ 输出对象。对方 im_id 由候选人快照注入(索要走 askfor 接口必需:
+     *  实测 resume-view 响应不含任何 im 字段) */
+    public Optional<JsonNode> requestResume(LiepinAccount account, String resumeId, String oppositeImId, Duration timeout) {
         if (resumeId == null || resumeId.isBlank()) {
             throw BizException.badRequest("索要简历必须提供 resume_id，不能使用 im_id");
         }
-        CliResult result = run(account, timeout, "request-resume", resumeId, "--json");
+        CliResult result = (oppositeImId == null || oppositeImId.isBlank())
+                ? run(account, timeout, "request-resume", resumeId, "--json")
+                : run(account, timeout, "request-resume", resumeId, "--imId", oppositeImId, "--json");
         return JsonExtractor.parse(result.stdout());
     }
 

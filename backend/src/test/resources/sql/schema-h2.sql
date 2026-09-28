@@ -83,6 +83,8 @@ CREATE TABLE IF NOT EXISTS greeting_record (
     account_id   BIGINT NOT NULL,
     liepin_job_id VARCHAR(50),
     attach_probe_msg_id VARCHAR(64),
+    resume_requested_at TIMESTAMP,
+    resume_request_count INT DEFAULT 0 NOT NULL,
     message      TEXT,
     status       VARCHAR(20) NOT NULL DEFAULT 'SENT',
     mode         VARCHAR(20) NOT NULL,

@@ -57,6 +57,13 @@ public class ResumeCollectService {
         this.jdMapper = jdMapper;
     }
 
+    /** 索要简历防重复窗口:24 小时内不重复请求（2026-09-27 实测:未确认保留原状态导致
+     *  对同一候选人 30 分钟内重复索要;CLI 已改为直调 askfor 接口） */
+    private static final Duration REQUEST_RETRY_WINDOW = Duration.ofHours(24);
+
+    /** 索要简历累计尝试上限:达到后仅等待对方主动发送附件 */
+    private static final int MAX_REQUEST_ATTEMPTS = 2;
+
     /**
      * 对岗位下已打招呼(SENT/REQUESTED)且未入库简历的候选人:
      * 检测聊天回复 → 有回复则索要简历。
@@ -165,22 +172,44 @@ public class ResumeCollectService {
             log.warn("候选人 {} 缺少 resume_id,无法索要简历", candidate.getId());
             return;
         }
-        Optional<JsonNode> result = commandService.requestResume(account, resumeId, timeout);
-        boolean confirmed = result.filter(node -> node.path("success").asBoolean(false)
-                && node.path("confirmed").asBoolean(false)).isPresent();
-        if (!confirmed) {
-            // 记录 CLI 返回详情(message / 按钮状态),区分"按钮不可点(已索要过/权益不足)"与"点击未确认"
-            String detail = result.map(node -> {
-                String message = node.path("message").asText("");
-                String button = node.path("button_text").asText("");
-                return message + (button.isEmpty() ? "" : "(按钮:" + button + ")");
-            }).orElse("无输出");
-            log.warn("候选人 {} 索要未获确认,保留原状态: {}", candidate.getId(), detail);
+        // 对方 im_id 从候选人快照取(resume-view 响应不含 im 字段,askfor 接口必需)
+        JsonNode snapshot = JsonExtractor.parse(candidate.getSnapshot()).orElse(null);
+        String oppositeImId = snapshot == null ? "" : snapshot.path("im_id").asText("");
+        // 防重复:24h 窗口 + 次数上限(接口受理即记尝试,不再因未回显而每轮重点)
+        int attempts = record.getResumeRequestCount() == null ? 0 : record.getResumeRequestCount();
+        if (attempts >= MAX_REQUEST_ATTEMPTS) {
+            log.info("候选人 {} 索要简历已尝试 {} 次,停止重试,等待对方主动发送", candidate.getId(), attempts);
             return;
         }
-        record.setStatus("REQUESTED");
+        if (record.getResumeRequestedAt() != null
+                && Duration.between(record.getResumeRequestedAt(), LocalDateTime.now())
+                        .compareTo(REQUEST_RETRY_WINDOW) < 0) {
+            log.info("候选人 {} 24h 内已索要过简历,跳过(等待对方响应)", candidate.getId());
+            return;
+        }
+        Optional<JsonNode> result = commandService.requestResume(account, resumeId, oppositeImId, timeout);
+        boolean called = result.filter(node -> node.path("success").asBoolean(false)).isPresent();
+        boolean confirmed = result.filter(node -> node.path("success").asBoolean(false)
+                && node.path("confirmed").asBoolean(false)).isPresent();
+        if (!called) {
+            // 接口未被受理(未发出去):不记尝试,下一轮可重试
+            String detail = result.map(node -> node.path("message").asText("")).orElse("无输出");
+            log.warn("候选人 {} 索要简历未受理,不记尝试: {}", candidate.getId(), detail);
+            return;
+        }
+        // 接口已受理(无论会话侧是否回显)都记录本次尝试:24h 内不再重复请求
+        record.setResumeRequestedAt(LocalDateTime.now());
+        record.setResumeRequestCount(attempts + 1);
+        if (confirmed) {
+            record.setStatus("REQUESTED");
+        }
         greetingMapper.updateById(record);
-        log.info("索要简历已确认(account={}, candidate={})", account.getId(), candidate.getId());
+        if (confirmed) {
+            log.info("索要简历已确认(account={}, candidate={})", account.getId(), candidate.getId());
+        } else {
+            log.info("候选人 {} 索要简历已发出(接口受理,未回显确认),已记录尝试(第 {} 次)",
+                    candidate.getId(), attempts + 1);
+        }
     }
 
     /**
