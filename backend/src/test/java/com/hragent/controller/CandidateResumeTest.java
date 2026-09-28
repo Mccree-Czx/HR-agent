@@ -1,6 +1,7 @@
 package com.hragent.controller;
 
 import com.hragent.common.BizException;
+import com.hragent.dto.CandidateDetail;
 import com.hragent.entity.Candidate;
 import com.hragent.entity.Jd;
 import com.hragent.entity.ResumeFile;
@@ -189,5 +190,68 @@ class CandidateResumeTest {
         BizException e = assertThrows(BizException.class,
                 () -> candidateController.resume(999999L));
         assertEquals(404, e.getCode());
+    }
+
+    // ---------- 读标记(参照 HR Portal V2:预览成功记录最后查看人/时间,2026-09-28) ----------
+
+    @Test
+    void resumePreviewRecordsLastViewer() {
+        Candidate candidate = createCandidate(createJd());
+        storeResume(candidate);
+        UserContext.set(admin());
+
+        candidateController.resume(candidate.getId());
+
+        Candidate after = candidateMapper.selectById(candidate.getId());
+        assertNotNull(after.getResumeLastViewedAt(), "预览成功应写入最后查看时间");
+        assertEquals(1L, after.getResumeLastViewedBy(), "最后查看人应为当前用户");
+    }
+
+    // ---------- 招聘跟进状态(HR 筛选工作台,2026-09-28) ----------
+
+    @Test
+    void adminUpdatesRecruitStatus() {
+        Candidate candidate = createCandidate(createJd());
+        UserContext.set(admin());
+
+        Candidate updated = candidateController.setRecruitStatus(
+                candidate.getId(), new CandidateController.RecruitStatusRequest("QUALIFIED")).getData();
+
+        assertEquals("QUALIFIED", updated.getRecruitStatus());
+        assertEquals("QUALIFIED", candidateMapper.selectById(candidate.getId()).getRecruitStatus());
+    }
+
+    @Test
+    void invalidRecruitStatusRejected() {
+        Candidate candidate = createCandidate(createJd());
+        UserContext.set(admin());
+
+        BizException e = assertThrows(BizException.class, () -> candidateController.setRecruitStatus(
+                candidate.getId(), new CandidateController.RecruitStatusRequest("NOT_A_STATUS")));
+        assertEquals(400, e.getCode());
+    }
+
+    @Test
+    void unassignedHrCannotUpdateRecruitStatus() {
+        Candidate candidate = createCandidate(createJd());
+        UserContext.set(hr(96L)); // 未分配该岗位
+
+        BizException e = assertThrows(BizException.class, () -> candidateController.setRecruitStatus(
+                candidate.getId(), new CandidateController.RecruitStatusRequest("QUALIFIED")));
+        assertEquals(403, e.getCode());
+    }
+
+    @Test
+    void detailExposesResumeAndFileName() {
+        Candidate candidate = createCandidate(createJd());
+        storeResume(candidate);
+        UserContext.set(admin());
+
+        CandidateDetail detail = candidateController.detail(candidate.getId()).getData();
+
+        assertEquals(candidate.getId(), detail.getCandidate().getId());
+        assertNotNull(detail.getResumeFile());
+        assertNotNull(detail.getResumeFileName());
+        assertTrue(detail.getResumeFileName().endsWith(".pdf"));
     }
 }

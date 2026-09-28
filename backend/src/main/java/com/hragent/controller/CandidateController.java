@@ -5,17 +5,20 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.hragent.common.ApiResponse;
 import com.hragent.common.BizException;
+import com.hragent.dto.CandidateDetail;
 import com.hragent.dto.CandidateLedger;
 import com.hragent.entity.Candidate;
 import com.hragent.entity.GreetingRecord;
 import com.hragent.entity.Jd;
 import com.hragent.entity.ResumeFile;
 import com.hragent.entity.ScoreRecord;
+import com.hragent.entity.SysUser;
 import com.hragent.repository.CandidateMapper;
 import com.hragent.repository.GreetingRecordMapper;
 import com.hragent.repository.JdMapper;
 import com.hragent.repository.ResumeFileMapper;
 import com.hragent.repository.ScoreRecordMapper;
+import com.hragent.repository.SysUserMapper;
 import com.hragent.security.LoginUser;
 import com.hragent.security.UserContext;
 import com.hragent.service.UserJdService;
@@ -25,12 +28,15 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -50,11 +56,12 @@ public class CandidateController {
     private final JdMapper jdMapper;
     private final UserJdService userJdService;
     private final StorageService storageService;
+    private final SysUserMapper sysUserMapper;
 
     public CandidateController(CandidateMapper candidateMapper, ScoreRecordMapper scoreRecordMapper,
                                GreetingRecordMapper greetingMapper, ResumeFileMapper resumeFileMapper,
                                JdMapper jdMapper, UserJdService userJdService,
-                               StorageService storageService) {
+                               StorageService storageService, SysUserMapper sysUserMapper) {
         this.candidateMapper = candidateMapper;
         this.scoreRecordMapper = scoreRecordMapper;
         this.greetingMapper = greetingMapper;
@@ -62,6 +69,7 @@ public class CandidateController {
         this.jdMapper = jdMapper;
         this.userJdService = userJdService;
         this.storageService = storageService;
+        this.sysUserMapper = sysUserMapper;
     }
 
     @GetMapping
@@ -69,6 +77,7 @@ public class CandidateController {
                                                     @RequestParam(defaultValue = "10") int pageSize,
                                                     @RequestParam(required = false) Long jdId,
                                                     @RequestParam(required = false) String passStatus,
+                                                    @RequestParam(required = false) String recruitStatus,
                                                     @RequestParam(required = false) Boolean hasResumeFile,
                                                     @RequestParam(required = false) Boolean unassigned) {
         LoginUser user = UserContext.get();
@@ -87,6 +96,7 @@ public class CandidateController {
         LambdaQueryWrapper<Candidate> qw = new LambdaQueryWrapper<Candidate>()
                 .eq(jdId != null, Candidate::getJdId, jdId)
                 .eq(passStatus != null && !passStatus.isBlank(), Candidate::getPassStatus, passStatus)
+                .eq(recruitStatus != null && !recruitStatus.isBlank(), Candidate::getRecruitStatus, recruitStatus)
                 .orderByDesc(Candidate::getId);
 
         // 已收简历视图:仅返回存在 resume_file 入库记录的候选人(设计 §3.4/§4.3)
@@ -165,6 +175,11 @@ public class CandidateController {
             throw BizException.notFound("简历文件缺失");
         }
 
+        // 读标记(参照 HR Portal V2 约定:预览成功即记录最后查看人/时间)
+        candidate.setResumeLastViewedAt(LocalDateTime.now());
+        candidate.setResumeLastViewedBy(user.getUserId());
+        candidateMapper.updateById(candidate);
+
         MediaType mediaType = "pdf".equalsIgnoreCase(file.getFormat())
                 ? MediaType.APPLICATION_PDF : MediaType.APPLICATION_OCTET_STREAM;
         return ResponseEntity.ok()
@@ -173,6 +188,79 @@ public class CandidateController {
                 .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.inline()
                         .filename(displayName(file), StandardCharsets.UTF_8).build().toString())
                 .body(bytes);
+    }
+
+    /** 招聘跟进状态合法值(单一来源;中文标签在前端 labels.js 单一映射表) */
+    private static final Set<String> RECRUIT_STATUSES = Set.of(
+            "PENDING_REVIEW", "QUALIFIED", "INTERVIEW_SCHEDULED", "NOT_SUITABLE");
+
+    /**
+     * 更新招聘跟进状态(HR 筛选工作台;参照 HR Portal V2 工作流)。
+     * 非法值 400;非 ADMIN 仅限其授权岗位下的候选人,否则 403。
+     */
+    @PatchMapping("/{id}/recruit-status")
+    public ApiResponse<Candidate> setRecruitStatus(@PathVariable Long id,
+                                                   @RequestBody RecruitStatusRequest request) {
+        String status = request == null || request.recruitStatus() == null ? "" : request.recruitStatus().trim();
+        if (!RECRUIT_STATUSES.contains(status)) {
+            throw BizException.badRequest("非法的招聘状态: " + status);
+        }
+        Candidate candidate = requireVisibleCandidate(id, "无权操作该候选人");
+        candidate.setRecruitStatus(status);
+        candidateMapper.updateById(candidate);
+        return ApiResponse.ok(candidate);
+    }
+
+    /**
+     * 候选人详情(抽屉三区:基本信息 / AI 评分 / 简历资料)。
+     * 授权同简历下载:ADMIN 或候选人所属岗位在分配范围内。
+     */
+    @GetMapping("/{id}/detail")
+    public ApiResponse<CandidateDetail> detail(@PathVariable Long id) {
+        Candidate candidate = requireVisibleCandidate(id, "无权查看该候选人");
+        ScoreRecord latestScore = scoreRecordMapper.selectOne(new LambdaQueryWrapper<ScoreRecord>()
+                .eq(ScoreRecord::getCandidateId, id)
+                .orderByDesc(ScoreRecord::getId)
+                .last("LIMIT 1"));
+        ResumeFile resumeFile = resumeFileMapper.selectOne(new LambdaQueryWrapper<ResumeFile>()
+                .eq(ResumeFile::getCandidateId, id)
+                .orderByDesc(ResumeFile::getId)
+                .last("LIMIT 1"));
+        Jd jd = candidate.getJdId() == null ? null : jdMapper.selectById(candidate.getJdId());
+        return ApiResponse.ok(new CandidateDetail(
+                candidate,
+                jd == null ? null : jd.getTitle(),
+                latestScore,
+                resumeFile,
+                resumeFile == null ? null : displayName(resumeFile),
+                nameOf(candidate.getResumeLastViewedBy())));
+    }
+
+    /** 授权校验:候选人存在 + (ADMIN 或所属岗位在授权范围内);否则 404 / 403 */
+    private Candidate requireVisibleCandidate(Long id, String forbiddenMessage) {
+        LoginUser user = UserContext.get();
+        Set<Long> allowed = userJdService.allowedJdIds(user.getUserId(), user.getRole());
+        Candidate candidate = candidateMapper.selectById(id);
+        if (candidate == null) {
+            throw BizException.notFound("候选人不存在");
+        }
+        if (allowed != null && (candidate.getJdId() == null || !allowed.contains(candidate.getJdId()))) {
+            throw BizException.forbidden(forbiddenMessage);
+        }
+        return candidate;
+    }
+
+    /** 用户显示名(username;不存在返回 null) */
+    private String nameOf(Long userId) {
+        if (userId == null) {
+            return null;
+        }
+        SysUser user = sysUserMapper.selectById(userId);
+        return user == null ? null : user.getUsername();
+    }
+
+    /** 招聘状态请求体 */
+    public record RecruitStatusRequest(String recruitStatus) {
     }
 
     /** 展示文件名:取 objectKey 文件名部分并去除候选 ID 前缀(objectKey 形如 resumes/20260926/{id}-{safeName}) */
@@ -204,14 +292,24 @@ public class CandidateController {
         Map<Long, ResumeFile> resumes = resumeFileMapper.selectList(
                         new LambdaQueryWrapper<ResumeFile>().in(ResumeFile::getCandidateId, ids))
                 .stream().collect(Collectors.toMap(ResumeFile::getCandidateId, Function.identity(), (a, b) -> a));
+        // 最后查看人显示名:单次批量查询,避免 N+1
+        Set<Long> viewedByIds = candidates.stream()
+                .map(Candidate::getResumeLastViewedBy)
+                .filter(java.util.Objects::nonNull)
+                .collect(Collectors.toSet());
+        Map<Long, String> viewerNames = viewedByIds.isEmpty() ? Map.of()
+                : sysUserMapper.selectBatchIds(viewedByIds).stream()
+                        .collect(Collectors.toMap(SysUser::getId, SysUser::getUsername, (a, b) -> a));
 
         List<CandidateLedger> ledgers = new ArrayList<>();
         for (Candidate candidate : candidates) {
+            Long viewedBy = candidate.getResumeLastViewedBy();
             ledgers.add(new CandidateLedger(
                     candidate,
                     scores.get(candidate.getId()),
                     greetings.get(candidate.getId()),
-                    resumes.get(candidate.getId())));
+                    resumes.get(candidate.getId()),
+                    viewedBy == null ? null : viewerNames.get(viewedBy)));
         }
         return ledgers;
     }

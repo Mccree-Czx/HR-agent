@@ -21,4 +21,7 @@ public class CandidateLedger {
     private GreetingRecord greeting;
 
     private ResumeFile resumeFile;
+
+    /** 简历最后查看人显示名(未查看为 null;前端本人展示为"我") */
+    private String lastViewedByName;
 }

@@ -25,6 +25,15 @@ public class Candidate {
 
     private String passStatus;
 
+    /** 招聘跟进状态(HR 工作流):PENDING_REVIEW/QUALIFIED/INTERVIEW_SCHEDULED/NOT_SUITABLE */
+    private String recruitStatus;
+
+    /** 简历最后查看时间(NULL=未查看) */
+    private LocalDateTime resumeLastViewedAt;
+
+    /** 简历最后查看人(sys_user.id) */
+    private Long resumeLastViewedBy;
+
     private Long jdId;
 
     private LocalDateTime createdAt;
