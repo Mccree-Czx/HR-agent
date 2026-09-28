@@ -44,7 +44,9 @@ export const candidateApi = {
   // 详情抽屉三区(基本信息/AI 评分/简历资料)
   detail: (id) => http.get(`/candidate/${id}/detail`),
   // 招聘跟进状态(HR 工作流:待筛选/合格/已约面/不合适)
-  setRecruitStatus: (id, recruitStatus) => http.patch(`/candidate/${id}/recruit-status`, { recruitStatus })
+  setRecruitStatus: (id, recruitStatus) => http.patch(`/candidate/${id}/recruit-status`, { recruitStatus }),
+  // 在线简历(实时拉取平台详情;CLI 最长达 3 分钟,关闭 axios 超时)
+  onlineResume: (id) => http.post(`/candidate/${id}/online-resume`, null, { timeout: 0 })
 }
 
 export const autoRecruitApi = {

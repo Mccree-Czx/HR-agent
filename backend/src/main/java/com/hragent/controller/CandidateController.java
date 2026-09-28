@@ -3,24 +3,31 @@ package com.hragent.controller;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.hragent.common.ApiResponse;
 import com.hragent.common.BizException;
+import com.hragent.config.HrAgentProperties;
 import com.hragent.dto.CandidateDetail;
 import com.hragent.dto.CandidateLedger;
 import com.hragent.entity.Candidate;
 import com.hragent.entity.GreetingRecord;
 import com.hragent.entity.Jd;
+import com.hragent.entity.LiepinAccount;
 import com.hragent.entity.ResumeFile;
 import com.hragent.entity.ScoreRecord;
 import com.hragent.entity.SysUser;
+import com.hragent.executor.CliException;
+import com.hragent.executor.JsonExtractor;
 import com.hragent.repository.CandidateMapper;
 import com.hragent.repository.GreetingRecordMapper;
 import com.hragent.repository.JdMapper;
+import com.hragent.repository.LiepinAccountMapper;
 import com.hragent.repository.ResumeFileMapper;
 import com.hragent.repository.ScoreRecordMapper;
 import com.hragent.repository.SysUserMapper;
 import com.hragent.security.LoginUser;
 import com.hragent.security.UserContext;
+import com.hragent.service.LiepinCommandService;
 import com.hragent.service.UserJdService;
 import com.hragent.storage.StorageService;
 import org.springframework.http.ContentDisposition;
@@ -30,12 +37,14 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -57,11 +66,16 @@ public class CandidateController {
     private final UserJdService userJdService;
     private final StorageService storageService;
     private final SysUserMapper sysUserMapper;
+    private final LiepinCommandService commandService;
+    private final LiepinAccountMapper accountMapper;
+    private final HrAgentProperties properties;
 
     public CandidateController(CandidateMapper candidateMapper, ScoreRecordMapper scoreRecordMapper,
                                GreetingRecordMapper greetingMapper, ResumeFileMapper resumeFileMapper,
                                JdMapper jdMapper, UserJdService userJdService,
-                               StorageService storageService, SysUserMapper sysUserMapper) {
+                               StorageService storageService, SysUserMapper sysUserMapper,
+                               LiepinCommandService commandService, LiepinAccountMapper accountMapper,
+                               HrAgentProperties properties) {
         this.candidateMapper = candidateMapper;
         this.scoreRecordMapper = scoreRecordMapper;
         this.greetingMapper = greetingMapper;
@@ -70,6 +84,9 @@ public class CandidateController {
         this.userJdService = userJdService;
         this.storageService = storageService;
         this.sysUserMapper = sysUserMapper;
+        this.commandService = commandService;
+        this.accountMapper = accountMapper;
+        this.properties = properties;
     }
 
     @GetMapping
@@ -234,6 +251,54 @@ public class CandidateController {
                 resumeFile,
                 resumeFile == null ? null : displayName(resumeFile),
                 nameOf(candidate.getResumeLastViewedBy())));
+    }
+
+    /**
+     * 在线简历(实时拉取,2026-09-28):调 CLI resume 获取平台在线简历详情,原样返回结构化 JSON。
+     * 每次调用为一次平台读取(只读轻足迹);成功即打读标记(与附件预览约定一致)。
+     * 风控/登录态异常由 CLI 链路标记与告警,这里返回可读原因。
+     */
+    @PostMapping("/{id}/online-resume")
+    public ApiResponse<JsonNode> onlineResume(@PathVariable Long id) {
+        Candidate candidate = requireVisibleCandidate(id, "无权查看该候选人简历");
+        String resumeId = resumeDetailId(candidate);
+        if (resumeId.isEmpty()) {
+            throw BizException.badRequest("该候选人无可用的简历标识,无法查看在线简历");
+        }
+        LiepinAccount account = accountMapper.selectOne(new LambdaQueryWrapper<LiepinAccount>()
+                .eq(LiepinAccount::getLoginStatus, "NORMAL")
+                .orderByAsc(LiepinAccount::getId)
+                .last("LIMIT 1"));
+        if (account == null) {
+            throw BizException.badRequest("无可用猎聘账号(登录态非 NORMAL),无法拉取在线简历");
+        }
+        JsonNode detail;
+        try {
+            detail = commandService.resume(account, resumeId,
+                    Duration.ofMinutes(properties.getLiepin().getShortTimeoutMinutes())).orElse(null);
+        } catch (CliException e) {
+            throw BizException.badRequest(e.getMessage());
+        }
+        if (detail == null || !detail.isObject()) {
+            throw BizException.badRequest("平台未返回在线简历详情(简历标识无效或无查看权限)");
+        }
+        candidate.setResumeLastViewedAt(LocalDateTime.now());
+        candidate.setResumeLastViewedBy(UserContext.get().getUserId());
+        candidateMapper.updateById(candidate);
+        return ApiResponse.ok(detail);
+    }
+
+    /** 在线简历详情入参:优先快照内 resume_id,其次落库主列(与 ScoringEngine 同口径) */
+    private String resumeDetailId(Candidate candidate) {
+        JsonNode snapshot = JsonExtractor.parse(candidate.getSnapshot()).orElse(null);
+        if (snapshot != null) {
+            String fromSnapshot = snapshot.path("resume_id").asText("").trim();
+            if (!fromSnapshot.isEmpty()) {
+                return fromSnapshot;
+            }
+        }
+        String stored = candidate.getResumeId();
+        return stored == null ? "" : stored.trim();
     }
 
     /** 授权校验:候选人存在 + (ADMIN 或所属岗位在授权范围内);否则 404 / 403 */

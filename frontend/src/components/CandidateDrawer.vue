@@ -55,6 +55,10 @@
 
       <el-card shadow="never" class="cd-card">
         <template #header>简历资料</template>
+        <div class="cd-online-row">
+          <el-button type="primary" plain :loading="onlineLoading" @click="openOnlineResume">查看在线简历</el-button>
+          <span class="cd-online-hint">实时拉取平台在线简历（每次查看为一次读取）</span>
+        </div>
         <template v-if="detail.resumeFile">
           <div class="cd-file-row">
             <span class="cd-file-name">{{ detail.resumeFileName }}</span>
@@ -74,6 +78,49 @@
     </template>
     <el-skeleton v-else :rows="7" animated />
   </el-drawer>
+
+  <el-dialog v-model="onlineVisible" title="在线简历（平台实时）" width="720px" append-to-body>
+    <template v-if="onlineResume">
+      <el-descriptions :column="2" size="small" border>
+        <el-descriptions-item label="姓名">{{ onlineResume.name || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="性别 / 年龄">{{ [onlineResume.sex, onlineResume.age].filter(Boolean).join(' · ') || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="城市">{{ onlineResume.city || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="经验 / 学历">{{ [onlineResume.experience, onlineResume.education].filter(Boolean).join(' · ') || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="当前公司">{{ onlineResume.current_company || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="行业">{{ onlineResume.industry || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="求职状态">{{ onlineResume.work_status || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="在线状态">{{ onlineResume.online_status || '-' }}</el-descriptions-item>
+      </el-descriptions>
+      <div class="or-title">求职期望</div>
+      <el-descriptions :column="2" size="small" border>
+        <el-descriptions-item label="期望职位">{{ onlineResume.want_title || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="期望薪资">{{ onlineResume.want_salary || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="期望城市">{{ onlineResume.want_city || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="期望行业">{{ onlineResume.want_industry || '-' }}</el-descriptions-item>
+      </el-descriptions>
+      <template v-if="onlineResume.work_history">
+        <div class="or-title">工作经历</div>
+        <div class="or-pre">{{ onlineResume.work_history }}</div>
+      </template>
+      <template v-if="onlineResume.education_history">
+        <div class="or-title">教育经历</div>
+        <div class="or-pre">{{ onlineResume.education_history }}</div>
+      </template>
+      <template v-if="onlineResume.skills || onlineResume.languages">
+        <div class="or-title">技能与语言</div>
+        <div class="or-pre">{{ [onlineResume.skills, onlineResume.languages].filter(Boolean).join('\n') }}</div>
+      </template>
+      <template v-if="onlineResume.self_descr">
+        <div class="or-title">自我评价</div>
+        <div class="or-pre">{{ onlineResume.self_descr }}</div>
+      </template>
+    </template>
+    <el-skeleton v-else :rows="6" animated />
+    <template #footer>
+      <span class="or-hint">数据实时拉取，非本地缓存</span>
+      <el-button @click="onlineVisible = false">关闭</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <script setup>
@@ -91,6 +138,9 @@ const emit = defineEmits(['update:modelValue', 'updated'])
 const detail = ref(null)
 const previewUrl = ref('')
 const previewLoading = ref(false)
+const onlineVisible = ref(false)
+const onlineLoading = ref(false)
+const onlineResume = ref(null)
 
 const cur = computed(() => detail.value?.candidate?.recruitStatus || 'PENDING_REVIEW')
 
@@ -134,6 +184,8 @@ async function loadDetail() {
 watch(
   () => props.candidateId,
   (v) => {
+    onlineVisible.value = false
+    onlineResume.value = null
     if (props.modelValue && v) loadDetail()
   }
 )
@@ -168,6 +220,22 @@ async function openPreview() {
 async function openInNewTab() {
   if (!previewUrl.value) await openPreview()
   if (previewUrl.value) window.open(previewUrl.value, '_blank')
+}
+
+// 在线简历:实时拉取(一次平台读取);成功即写读标记
+async function openOnlineResume() {
+  onlineLoading.value = true
+  try {
+    const res = await candidateApi.onlineResume(props.candidateId)
+    onlineResume.value = res.data
+    onlineVisible.value = true
+    await loadDetail()
+    emit('updated')
+  } catch {
+    // 拦截器已提示(含风控/无可用账号等原因)
+  } finally {
+    onlineLoading.value = false
+  }
 }
 
 function clearPreview() {
@@ -265,5 +333,32 @@ onBeforeUnmount(clearPreview)
   height: 560px;
   border: 1px solid var(--hr-border);
   border-radius: var(--hr-radius-sm);
+}
+.cd-online-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.cd-online-hint {
+  font-size: 12px;
+  color: var(--hr-text-3);
+}
+.or-title {
+  margin: 14px 0 6px;
+  font-weight: 600;
+  color: var(--hr-text-1);
+}
+.or-pre {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--hr-text-2);
+  white-space: pre-wrap;
+}
+.or-hint {
+  float: left;
+  font-size: 12px;
+  color: var(--hr-text-3);
+  line-height: 32px;
 }
 </style>
