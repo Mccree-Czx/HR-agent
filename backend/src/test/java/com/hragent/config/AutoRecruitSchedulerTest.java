@@ -9,6 +9,7 @@ import com.hragent.entity.Jd;
 import com.hragent.entity.LiepinAccount;
 import com.hragent.entity.SearchTask;
 import com.hragent.executor.CliException;
+import com.hragent.executor.LiepinCliExecutor;
 import com.hragent.repository.AppSettingMapper;
 import com.hragent.repository.AutoRecruitRoundMapper;
 import com.hragent.repository.JdMapper;
@@ -34,6 +35,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -108,6 +110,10 @@ class AutoRecruitSchedulerTest {
 
     @MockitoBean
     private ChatPollService chatPollService;
+
+    /** 平台足迹计数器 mock:测试中由各服务桩的 Answer 模拟"触达平台即递增" */
+    @MockitoBean
+    private LiepinCliExecutor cliExecutor;
 
     private Long accountId;
 
@@ -369,31 +375,62 @@ class AutoRecruitSchedulerTest {
     void pacingFloorBetweenActions() {
         createAccount();
         createActiveJd("123");
+        AtomicLong seq = new AtomicLong();
         List<LocalDateTime> actionTimes = new ArrayList<>();
+        when(cliExecutor.spawnSeq()).thenAnswer(inv -> seq.get());
         when(chatPollService.fetchSessions(any())).thenAnswer(inv -> {
+            seq.incrementAndGet();
             actionTimes.add(virtualNow);
             return List.of();
         });
         when(greetingService.greetPassed(anyLong(), anyInt())).thenAnswer(inv -> {
+            seq.incrementAndGet();
             actionTimes.add(virtualNow);
             return 0;
         });
         when(scoringEngine.scoreNext(anyLong(), anyInt())).thenAnswer(inv -> {
+            seq.incrementAndGet();
             actionTimes.add(virtualNow);
             return 0;
         });
         when(searchTaskService.createRecommendTask(anyLong(), anyLong())).thenAnswer(inv -> {
+            seq.incrementAndGet();
             actionTimes.add(virtualNow);
             return null;
         });
 
         scheduler.runRound(WORK_TIME);
 
-        assertTrue(actionTimes.size() >= 4, "至少应执行 列表/招呼/读取/创建 四类动作");
+        assertTrue(actionTimes.size() >= 4, "至少应执行 列表/招呼/读取/创建 四类平台动作");
         for (int i = 1; i < actionTimes.size(); i++) {
             Duration gap = Duration.between(actionTimes.get(i - 1), actionTimes.get(i));
             assertTrue(gap.getSeconds() >= 30,
-                    "相邻动作间隔应 ≥ paceMillis(30s),实际 " + gap + "(动作 " + (i - 1) + "→" + i + ")");
+                    "平台动作相邻间隔应 ≥ paceMillis(30s),实际 " + gap + "(动作 " + (i - 1) + "→" + i + ")");
+        }
+    }
+
+    @Test
+    void noOpSessionUnitsDoNotConsumePlatformPacing() {
+        createAccount();
+        createActiveJd("123");
+        AtomicLong seq = new AtomicLong();
+        when(cliExecutor.spawnSeq()).thenAnswer(inv -> seq.get());
+        when(chatPollService.fetchSessions(any())).thenAnswer(inv -> {
+            seq.incrementAndGet();
+            return List.of(sessionNode("n1"), sessionNode("n2"), sessionNode("n3"));
+        });
+        List<LocalDateTime> noOpTimes = new ArrayList<>();
+        when(chatPollService.handleSession(any(), any())).thenAnswer(inv -> {
+            noOpTimes.add(virtualNow); // 未递增 seq:纯记账会话(空转)
+            return false;
+        });
+
+        scheduler.runRound(WORK_TIME);
+
+        assertEquals(3, noOpTimes.size());
+        for (int i = 1; i < noOpTimes.size(); i++) {
+            assertTrue(Duration.between(noOpTimes.get(i - 1), noOpTimes.get(i)).getSeconds() <= 5,
+                    "纯记账会话单元应秒级快速通过,不占用平台节拍");
         }
     }
 

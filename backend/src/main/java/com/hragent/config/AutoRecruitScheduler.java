@@ -10,6 +10,7 @@ import com.hragent.entity.Jd;
 import com.hragent.entity.LiepinAccount;
 import com.hragent.entity.SearchTask;
 import com.hragent.executor.CliException;
+import com.hragent.executor.LiepinCliExecutor;
 import com.hragent.repository.AutoRecruitRoundMapper;
 import com.hragent.repository.JdMapper;
 import com.hragent.repository.LiepinAccountMapper;
@@ -91,6 +92,7 @@ public class AutoRecruitScheduler {
     private final AutoRecruitSettingService settingService;
     private final AutoRecruitRoundMapper roundMapper;
     private final RiskSuspectGuard riskSuspectGuard;
+    private final LiepinCliExecutor cliExecutor;
 
     /** 轮次互斥:同一时刻仅允许一轮(定时重叠跳过,手动触发拒绝) */
     private final AtomicBoolean running = new AtomicBoolean(false);
@@ -125,7 +127,7 @@ public class AutoRecruitScheduler {
                                 SearchTaskService searchTaskService, ScoringEngine scoringEngine,
                                 GreetingService greetingService, ChatPollService chatPollService,
                                 AutoRecruitSettingService settingService, AutoRecruitRoundMapper roundMapper,
-                                RiskSuspectGuard riskSuspectGuard) {
+                                RiskSuspectGuard riskSuspectGuard, LiepinCliExecutor cliExecutor) {
         this.properties = properties;
         this.accountMapper = accountMapper;
         this.jdMapper = jdMapper;
@@ -137,6 +139,7 @@ public class AutoRecruitScheduler {
         this.settingService = settingService;
         this.roundMapper = roundMapper;
         this.riskSuspectGuard = riskSuspectGuard;
+        this.cliExecutor = cliExecutor;
     }
 
     /** 每天 09:00–18:00 每整点启动一轮(周末与节假日同样执行) */
@@ -241,6 +244,10 @@ public class AutoRecruitScheduler {
                 log.warn("自动招聘:冷却轻探测的冻结跨越平摊窗口,本轮收尾");
                 return;
             }
+            if (cooling) {
+                // 探测已触达平台:先进入节拍再开始单元循环,避免"探测→首次刷新"贴脸连打
+                sleepPaced(work, deadline);
+            }
 
             // 节拍循环:一 tick 一动作,自适应间隔铺满窗口
             while (true) {
@@ -266,12 +273,19 @@ public class AutoRecruitScheduler {
                     sleepUntil(now.plusNanos(waitMs * 1_000_000L), deadline);
                     continue;
                 }
+                long spawnSeqBefore = cliExecutor.spawnSeq();
                 if (!executeUnit(unit, work, stats, account, deadline)) {
                     stats.abandoned = work.openUnits();
                     log.warn("自动招聘:疑似拦截冻结跨越平摊窗口,本轮收尾");
                     break;
                 }
-                sleepPaced(work, deadline);
+                if (cliExecutor.spawnSeq() > spawnSeqBefore) {
+                    // 触达平台的动作:按"平台足迹"自适应节拍(剩余窗口/剩余单元)
+                    sleepPaced(work, deadline);
+                } else {
+                    // 纯记账单元(空转会話/无待办岗位等):轻间隔快速通过,不占用平台节拍
+                    sleepUntil(clock.get().plusSeconds(1), deadline);
+                }
             }
         } catch (CliException e) {
             if (e.getType() == CliException.Type.RISK_CONTROL) {
@@ -669,9 +683,15 @@ public class AutoRecruitScheduler {
             return wait == Long.MAX_VALUE ? SLEEP_CHUNK_MILLIS : wait;
         }
 
-        /** 剩余单元估算(节拍自适应用;仅粗估,防止间隔过疏/过密) */
+        /** 剩余单元估算(节拍自适应用;仅粗估,防止间隔过疏/过密):
+         *  会话仅计"候选人最后发言"(direction=1,可能触发平台动作),其余为纯记账单元不计入。 */
         private int openUnits() {
-            int count = pendingSessions.size();
+            int count = 0;
+            for (JsonNode session : pendingSessions) {
+                if ("1".equals(session.path("direction").asText(""))) {
+                    count++;
+                }
+            }
             for (Jd jd : jds) {
                 if (!Boolean.TRUE.equals(readDone.get(jd.getId()))) {
                     count++;

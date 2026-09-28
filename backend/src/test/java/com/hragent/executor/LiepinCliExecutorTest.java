@@ -51,6 +51,17 @@ class LiepinCliExecutorTest {
     }
 
     @Test
+    void executeIncrementsSpawnSeq() throws Exception {
+        LiepinCliExecutor executor = newExecutor();
+        long before = executor.spawnSeq();
+
+        executor.execute(account(1), Duration.ofSeconds(10), "search", "java", "--json");
+
+        assertEquals(before + 1, executor.spawnSeq(),
+                "每次启动 CLI 子进程应递增平台足迹计数(上层节拍据此区分触达/记账单元)");
+    }
+
+    @Test
     void executeTimeout() throws Exception {
         CliResult result = newExecutor().execute(account(1), Duration.ofSeconds(2), "sleep-long");
         assertTrue(result.timedOut());

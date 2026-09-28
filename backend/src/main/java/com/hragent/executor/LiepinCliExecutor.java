@@ -39,6 +39,14 @@ public class LiepinCliExecutor {
     /** 账号维度互斥锁:保证同账号 CLI 子进程串行,规避同账号并发浏览器自动化风控风险 */
     private final ConcurrentHashMap<Long, ReentrantLock> accountLocks = new ConcurrentHashMap<>();
 
+    /** CLI 子进程启动计数(仅递增;供上层节拍判定"本单元是否触达平台",2026-09-28) */
+    private final java.util.concurrent.atomic.AtomicLong spawnSeq = new java.util.concurrent.atomic.AtomicLong();
+
+    /** 已启动的 CLI 子进程序号(含超时/失败尝试;空转会話等纯记账单元不增长,不参与平台节拍) */
+    public long spawnSeq() {
+        return spawnSeq.get();
+    }
+
     /** 风控拦截的结构性标记（命中则账号熔断，评审 P0-3；成功/失败全路径扫描）。
      *  只放平台风控页特有的域名/camelCase 标识——不会出现在候选人简历文本里，
      *  成功路径（stdout 为业务数据）也只信任这两类结构性证据。 */
@@ -112,6 +120,7 @@ public class LiepinCliExecutor {
                     String.join(" ", args), account.getId(), resolveUserDataDir(account));
 
             Process process = pb.start();
+            spawnSeq.incrementAndGet();
             boolean finished = process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS);
             if (!finished) {
                 process.destroyForcibly();
