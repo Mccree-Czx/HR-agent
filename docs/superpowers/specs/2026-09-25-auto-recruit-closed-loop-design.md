@@ -57,6 +57,7 @@
 - **调度**：新增 `AutoRecruitScheduler`（cron：每天 09:00–18:00 每小时，含周末与节假日）；任务经现有 search_task 队列串行执行；防重叠（岗位任务未完成则本轮跳过）。
 - **门槛**：jd 表新增 `score_threshold`、`threshold_suggestion`、`threshold_confirmed_by/at`；外发入口统一校验。
 - **评分**：ScoringEngine 前置职能校验门禁（三态：匹配/不匹配/待确认）；门槛取岗位值。
+- **提示词（2026-09-28 迁移）**：三处 AI 系统提示词（评分/话术/门槛建议）以 AgentScope 技能包维护于 `backend/src/main/resources/agents/skills/<name>/SKILL.md`（YAML frontmatter：name/description/version + 正文，正文为注入模型的 systemPrompt 唯一来源）；运行期经 `AgentSkillLoader` 加载（主路径 ClasspathSkillRepository，fat-jar 目录枚举异常时回退直读同一 MarkdownSkillParser 解析器；实测生产 fat-jar 走回退）；静态注入，三处仍为单轮 chat，行为与成本不变；修改 SKILL.md 需重启生效。
 - **打招呼**：移除每日配额拦截；保留节奏、防重复、SEND_FAILED 重试；发送前复核四条件。
 - **收集**：已知候选人附件收集已重构为纯接口路线（2026-09-27 上线）：卡片数据实际在消息 `payload.ext.extBody.bizData`（`bizType=7`，含 `attachmentResume.param → attachmentSign`）；CLI `attach-fetch` 检出后用 `get-resume-attachment` 换 `accessPath`，经浏览器下载通道落盘并校验，`saveResumeFile` 入库（文件名取自接口）；不打开会话（零已读副作用）。粒度防抖：`greeting_record.attach_probe_msg_id`——同一会话最新消息 ID 只探测一次；无附件记标记、失败不记标记（下轮重试）。旧“消息体扫描”仅保留给陌生来话兜底路径。
 - **配额字段**：保留数据库列（仅展示参考），移除执行层拦截。
