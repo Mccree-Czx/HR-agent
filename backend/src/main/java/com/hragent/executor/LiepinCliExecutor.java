@@ -39,17 +39,20 @@ public class LiepinCliExecutor {
     /** 账号维度互斥锁:保证同账号 CLI 子进程串行,规避同账号并发浏览器自动化风控风险 */
     private final ConcurrentHashMap<Long, ReentrantLock> accountLocks = new ConcurrentHashMap<>();
 
-    /** 风控拦截的精确标记（命中则账号熔断，评审 P0-3；全路径扫描）。
-     *  只放平台风控页特有的域名/中文短语，这些词不会出现在候选人数据里。 */
+    /** 风控拦截的结构性标记（命中则账号熔断，评审 P0-3；成功/失败全路径扫描）。
+     *  只放平台风控页特有的域名/camelCase 标识——不会出现在候选人简历文本里，
+     *  成功路径（stdout 为业务数据）也只信任这两类结构性证据。 */
     private static final List<String> RISK_KEYWORDS = List.of(
-            "captchaPage", "safe.liepin.com", "行为异常", "安全验证", "滑块验证");
+            "captchaPage", "safe.liepin.com");
 
-    /** 泛英文风控词：仅在命令失败/超时路径扫描。
-     *  成功时 stdout 是业务数据（如候选人简历 JSON），泛词误命中会让账号误熔断
-     *  （2026-09-27 实测：候选人简历里的 verify 触发熔断，轮次全停）；
+    /** 风控短语：仅在命令失败/超时路径扫描。
+     *  成功时 stdout 是业务数据（如候选人简历 JSON），短语误命中会让账号误熔断：
+     *  - 2026-09-27 实测：候选人简历里的 verify 触发熔断，轮次全停；
+     *  - 2026-09-28 实测：候选人简历里的“涉水安全验证”等中文短语致岗位 10 连续三轮误熔断，
+     *    手动不经扫描读取同一简历则完全正常。
      *  失败/超时时的输出是 CLI 自身错误文本，此处扫描才可信。 */
     private static final List<String> RISK_KEYWORDS_FAILURE_ONLY = List.of(
-            "captcha", "verify", "security-check", "forbidden");
+            "行为异常", "安全验证", "滑块验证", "captcha", "verify", "security-check", "forbidden");
 
     /** 登录态失效特征 */
     private static final List<String> NOT_LOGGED_KEYWORDS = List.of(

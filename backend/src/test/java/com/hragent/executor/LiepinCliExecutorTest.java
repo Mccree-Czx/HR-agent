@@ -121,6 +121,27 @@ class LiepinCliExecutorTest {
         assertEquals(CliException.Type.RISK_CONTROL, e.getType());
     }
 
+    @Test
+    void checkRiskIgnoresChineseRiskPhrasesInResumeData() {
+        // 回归(2026-09-28):简历里“涉水安全验证”(岗位 10 候选人)致连续三轮误熔断
+        LiepinCliExecutor executor = newExecutor();
+        CliResult result = new CliResult(0,
+                "[{\"name\":\"孙某\",\"work\":\"完成水压耐压测试、涉水安全验证、长期通水衰减测试\"}]", "", false);
+        executor.checkRisk(account(1), result); // 成功路径的业务数据不应被中文短语误判
+
+        CliResult slider = new CliResult(0,
+                "[{\"name\":\"测试员\",\"desc\":\"负责滑块验证用例设计与异常行为检测\"}]", "", false);
+        executor.checkRisk(account(1), slider);
+    }
+
+    @Test
+    void checkRiskStillDetectsChineseRiskPhrasesOnFailure() {
+        LiepinCliExecutor executor = newExecutor();
+        CliResult result = new CliResult(1, "Error: 页面跳转到安全验证", "", false);
+        CliException e = assertThrows(CliException.class, () -> executor.checkRisk(account(1), result));
+        assertEquals(CliException.Type.RISK_CONTROL, e.getType());
+    }
+
     // ---------- I1:账号维度互斥(同账号串行 / 不同账号不互斥) ----------
 
     @Test
