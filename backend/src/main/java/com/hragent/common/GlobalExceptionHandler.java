@@ -7,6 +7,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 @Slf4j
 @RestControllerAdvice
@@ -23,6 +24,13 @@ public class GlobalExceptionHandler {
         FieldError fe = e.getBindingResult().getFieldError();
         String message = fe == null ? "参数校验失败" : fe.getField() + ": " + fe.getDefaultMessage();
         return ResponseEntity.badRequest().body(ApiResponse.error(400, message));
+    }
+
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ApiResponse<Void>> handleNotFound(NoResourceFoundException e) {
+        // 静态资源缺失(如前端构建哈希变更后的旧缓存引用)属正常 404,不记 ERROR、不返回 500
+        log.debug("静态资源不存在: {}", e.getResourcePath());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.error(404, "资源不存在"));
     }
 
     @ExceptionHandler(Exception.class)
