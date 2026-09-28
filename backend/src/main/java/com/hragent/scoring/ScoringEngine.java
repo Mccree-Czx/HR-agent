@@ -134,9 +134,14 @@ public class ScoringEngine {
     /** 轮内简历详情读取总预算(跨岗位;beginRound 重置;默认不限,兼容未调用 beginRound 的单次场景;2026-09-28) */
     private final AtomicInteger roundReadBudget = new AtomicInteger(Integer.MAX_VALUE);
 
-    /** 轮次开始:重置轮内简历详情读取总预算(读取量是平台足迹大头;由调度器每轮调用,2026-09-28) */
+    /** 轮内单岗位简历详情读取计数(分片 scoreNext 用;beginRound 重置;2026-09-28 节拍改造) */
+    private final java.util.concurrent.ConcurrentHashMap<Long, Integer> roundReadByJd =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** 轮次开始:重置轮内简历详情读取总预算与单岗位计数(读取量是平台足迹大头;由调度器每轮调用,2026-09-28) */
     public void beginRound() {
         roundReadBudget.set(Math.max(0, properties.getAutoRecruit().getResumeDetailRoundLimit()));
+        roundReadByJd.clear();
     }
 
     /**
@@ -195,6 +200,64 @@ public class ScoringEngine {
             }
         }
         return scored;
+    }
+
+    /**
+     * 分片补评分(节拍循环一 tick 一候选人;2026-09-28 平摊改造):
+     * 处理至多 {@code maxCandidates} 个候选(已评分且指纹未变者跳过、不计入),
+     * 读取预算与 {@link #scorePending(Long)} 一致(轮内总预算 + 单岗位预算 + 轮内单岗位计数);
+     * 跨片间隔由外层节拍负责(单候选人片不会自睡)。风控类异常上抛(由轮次冻结-复测策略处理)。
+     */
+    public int scoreNext(Long jdId, int maxCandidates) {
+        if (maxCandidates <= 0) {
+            return 0;
+        }
+        List<Candidate> pending = candidateMapper.selectList(new LambdaQueryWrapper<Candidate>()
+                .eq(Candidate::getJdId, jdId)
+                .eq(Candidate::getPassStatus, "PENDING")
+                .orderByAsc(Candidate::getId));
+        if (pending.isEmpty()) {
+            return 0;
+        }
+        LiepinAccount account = firstNormalAccount();
+        int perJdLimit = Math.max(0, properties.getAutoRecruit().getResumeDetailBatchLimit());
+        long detailIntervalMillis = Math.max(0, properties.getAutoRecruit().getResumeDetailIntervalMillis());
+        int fetches = 0;
+        int processed = 0;
+        for (Candidate candidate : pending) {
+            if (processed >= maxCandidates) {
+                break;
+            }
+            try {
+                ScoreRecord existing = latestRecord(candidate.getId(), jdId);
+                if (existing != null && !shouldReevaluate(candidate, existing)) {
+                    continue;
+                }
+                if (account != null && roundReadBudget.get() > 0
+                        && roundReadByJd.getOrDefault(jdId, 0) < perJdLimit
+                        && needsResumeDetail(candidate)) {
+                    if (fetches > 0 && detailIntervalMillis > 0) {
+                        sleep(detailIntervalMillis);
+                    }
+                    fetches++;
+                    roundReadBudget.decrementAndGet();
+                    roundReadByJd.merge(jdId, 1, Integer::sum);
+                    enrichFromResumeDetail(account, candidate);
+                }
+                scoringExecutor.scoreInNewTransaction(candidate.getId());
+                processed++;
+            } catch (CliException e) {
+                if (e.getType() == CliException.Type.RISK_CONTROL) {
+                    throw e;
+                }
+                log.warn("候选人 {} 补评分失败,跳过: {}", candidate.getId(), e.getMessage());
+                processed++;
+            } catch (Exception e) {
+                log.warn("候选人 {} 补评分异常,跳过: {}", candidate.getId(), e.getMessage());
+                processed++;
+            }
+        }
+        return processed;
     }
 
     /** 取第一个 NORMAL 账号(与既有调度/打招呼口径一致) */

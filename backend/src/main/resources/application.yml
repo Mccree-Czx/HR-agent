@@ -53,6 +53,18 @@ hr-agent:
     resume-detail-interval-millis: ${AUTO_RECRUIT_RESUME_DETAIL_INTERVAL_MILLIS:2000}
     # 熔断恢复(重置)后的冷却窗口(分钟):窗口内暂停主动外发并轻探测;0=关闭(2026-09-28)
     risk-cooldown-minutes: ${AUTO_RECRUIT_RISK_COOLDOWN_MINUTES:120}
+    # 平摊窗口(分钟):整点轮次在窗口内匀速执行全部动作,到期顺延下轮(2026-09-28 节拍改造)
+    spread-minutes: ${AUTO_RECRUIT_SPREAD_MINUTES:50}
+    # 相邻动作最小间隔(毫秒;自适应节拍提速下限)
+    pace-millis: ${AUTO_RECRUIT_PACE_MILLIS:30000}
+    # 相邻动作最大间隔(毫秒;自适应节拍降速上限)
+    max-pace-millis: ${AUTO_RECRUIT_MAX_PACE_MILLIS:120000}
+    # 轮内会话列表刷新间隔(分钟)
+    poll-list-interval-minutes: ${AUTO_RECRUIT_POLL_LIST_INTERVAL_MINUTES:15}
+    # 推荐任务创建/执行最小间隔(分钟;防"接力"暴发)
+    recommend-gap-minutes: ${AUTO_RECRUIT_RECOMMEND_GAP_MINUTES:8}
+    # 疑似拦截冻结退避时长(分钟;首次命中冻结、到期复测一次;0=立即熔断)
+    risk-probe-backoff-minutes: ${AUTO_RECRUIT_RISK_PROBE_BACKOFF_MINUTES:15}
     # 会话列表拉取失败后的轮内重试等待(毫秒)
     poll-retry-delay-millis: ${AUTO_RECRUIT_POLL_RETRY_DELAY_MILLIS:20000}
   storage:

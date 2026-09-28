@@ -38,12 +38,14 @@ public class SearchTaskService {
     private final TaskQueueService queueService;
     private final HrAgentProperties properties;
     private final NotifyService notifyService;
+    private final RiskSuspectGuard riskSuspectGuard;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public SearchTaskService(SearchTaskMapper taskMapper, JdMapper jdMapper,
                              LiepinAccountMapper accountMapper, CandidateMapper candidateMapper,
                              LiepinCommandService commandService, TaskQueueService queueService,
-                             HrAgentProperties properties, NotifyService notifyService) {
+                             HrAgentProperties properties, NotifyService notifyService,
+                             RiskSuspectGuard riskSuspectGuard) {
         this.taskMapper = taskMapper;
         this.jdMapper = jdMapper;
         this.accountMapper = accountMapper;
@@ -52,6 +54,7 @@ public class SearchTaskService {
         this.queueService = queueService;
         this.properties = properties;
         this.notifyService = notifyService;
+        this.riskSuspectGuard = riskSuspectGuard;
     }
 
     /** 创建搜索任务(关键词取 JD 对内寻源备注,为空则用岗位名) */
@@ -138,8 +141,15 @@ public class SearchTaskService {
             log.info("任务 {} 完成:{} 条候选人,落库/更新 {} 条", task.getId(), candidates.size(), saved);
         } catch (CliException e) {
             if (e.getType() == CliException.Type.RISK_CONTROL) {
-                // 账号已熔断,任务无重试意义 → 终态失败
-                queueService.fail(task.getId(), "账号触发风控熔断: " + e.getMessage(), TaskQueueService.MAX_RETRY);
+                if (riskSuspectGuard.isHolding(task.getAccountId())) {
+                    // 首次命中:已进入冻结退避——任务按普通失败重试排期(调度器门禁保证解冻后才重试,
+                    // 该重试即天然复测);不终态
+                    queueService.fail(task.getId(), "疑似风控拦截,退避后重试: " + e.getMessage(),
+                            task.getRetryCount());
+                } else {
+                    // 真实熔断(复测再次命中/退避关闭):账号已置 RESTRICTED,任务无重试意义 → 终态失败
+                    queueService.fail(task.getId(), "账号触发风控熔断: " + e.getMessage(), TaskQueueService.MAX_RETRY);
+                }
             } else {
                 queueService.fail(task.getId(), e.getMessage(), task.getRetryCount());
             }

@@ -82,4 +82,12 @@ public interface SearchTaskMapper extends BaseMapper<SearchTask> {
             WHERE id = #{id} AND status = 'RUNNING'
             """)
     int markFailed(@Param("id") Long id, @Param("errorMsg") String errorMsg);
+
+    /** 该账号最近一次"执行相关"任务的更新时间(RUNNING/DONE/FAILED;QUEUED 创建不计入)
+     *  ——用于调度器最小执行间隔门禁(防任务接力暴发,2026-09-28) */
+    @Select("""
+            SELECT MAX(updated_at) FROM search_task
+            WHERE account_id = #{accountId} AND status IN ('RUNNING', 'DONE', 'FAILED')
+            """)
+    LocalDateTime selectLastExecutedAt(@Param("accountId") Long accountId);
 }

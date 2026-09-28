@@ -156,6 +156,45 @@ public class ChatPollService {
         return processed;
     }
 
+    // ---------- 节拍循环入口(2026-09-28 平摊改造:轮次按节拍逐会话/逐刷新消费) ----------
+
+    /** 轮开始标记:重置轮内索要预算(节拍循环每轮调用一次;不重置则预算跨轮累计) */
+    public void beginRound() {
+        asksThisPoll = 0;
+    }
+
+    /**
+     * 拉取会话列表(节拍循环按 {@code poll-list-interval-minutes} 周期刷新)。
+     * 非账号级失败已内含一次重试;仍失败返回 null,调用方跳过本次刷新(不断轮)。
+     */
+    public List<JsonNode> fetchSessions(LiepinAccount account) {
+        return fetchSessionsWithRetry(account, shortTimeout());
+    }
+
+    /**
+     * 处理单个会话(节拍循环一 tick 一个);返回是否产生落库/外发动作。
+     * 风控/登录失效上抛(由轮次的"冻结-复测"策略处理);其余失败仅记日志并返回 false。
+     */
+    public boolean handleSession(LiepinAccount account, JsonNode session) {
+        try {
+            return handleSession(account, session, shortTimeout());
+        } catch (CliException e) {
+            if (e.getType() == CliException.Type.RISK_CONTROL
+                    || e.getType() == CliException.Type.NOT_LOGGED_IN) {
+                throw e;
+            }
+            log.warn("会话处理失败,跳过: {}", e.getMessage());
+            return false;
+        } catch (Exception e) {
+            log.warn("会话处理异常,跳过: {}", e.getMessage(), e);
+            return false;
+        }
+    }
+
+    private Duration shortTimeout() {
+        return Duration.ofMinutes(properties.getLiepin().getShortTimeoutMinutes());
+    }
+
     /**
      * 轮内自动索要预算(2026-09-28 熔断治理):每轮最多 {@code askBatchLimit} 次自动索要,
      * 用尽则攒着下轮继续——与 60s 账号级外发间隔共同压低平台可见密度。

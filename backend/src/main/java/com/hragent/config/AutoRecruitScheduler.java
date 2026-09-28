@@ -1,6 +1,7 @@
 package com.hragent.config;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.hragent.common.BizException;
@@ -17,6 +18,7 @@ import com.hragent.scoring.ScoringEngine;
 import com.hragent.service.AutoRecruitSettingService;
 import com.hragent.service.ChatPollService;
 import com.hragent.service.GreetingService;
+import com.hragent.service.RiskSuspectGuard;
 import com.hragent.service.SearchTaskService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -27,21 +29,37 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 /**
- * 自动招聘闭环定时编排(设计 §2/§4.2;2026-09-26 改造为运行时开关):
+ * 自动招聘闭环定时编排(2026-09-26 运行时开关;2026-09-28 节拍改造"50 分钟平摊")。
+ *
  * <ul>
- *     <li>调度:北京时间每天 09:00–18:00 每整点执行一轮(含 18:00,周末与节假日同样执行),停机期间不补跑</li>
- *     <li>运行时开关({@link AutoRecruitSettingService}):<b>只停主动外发</b>——OFF 时轮次照常运行
- *         (检测回复/已读、附件下载、评分、拉推荐),仅跳过打招呼与索要(攒着,开启后自动补做);
- *         开关存库持久化,重启/部署保持;轮次开始时判定,进行中的轮次跑完才生效</li>
- *     <li>单轮顺序:先来信轮询(被动)→ 逐岗位消费存量(补评分/打招呼)→ 再拉新推荐(主动)</li>
- *     <li>防重叠:岗位已有 QUEUED/RUNNING 任务则本轮跳过;轮次级互斥(定时重叠跳过、手动触发拒绝)</li>
- *     <li>异常:单岗位失败不阻断其他岗位;风控类 {@link CliException} 立即停止本轮并上抛(既有熔断链路处理)</li>
- *     <li>每轮结束写入运行摘要({@code auto_recruit.last_run}),供状态接口展示</li>
- *     <li>每轮结束同时写入轮次历史表 {@code auto_recruit_round}(运行日志页;含手动 run-once)</li>
+ *     <li><b>调度</b>:北京时间每天 09:00–18:00 每整点启动一轮(含 18:00,周末与节假日同样执行);
+ *         轮次在 {@code spreadMinutes}(默认 50)窗口内<b>匀速</b>执行全部平台动作,到期未完成顺延下轮
+ *         (各动作幂等,下轮自然补做;不再有"整点暴发")</li>
+ *     <li><b>节拍</b>:统一队列一 tick 一动作;优先级 会话处理&gt;列表刷新&gt;打招呼&gt;简历读取&gt;推荐创建;
+ *         间隔自适应 = clamp(剩余窗口/剩余单元, paceMillis, maxPaceMillis)</li>
+ *     <li><b>中断语义</b>:全部墙钟判定;睡眠/重启越过窗口(或整点)即弃剩余单元,不自动续跑</li>
+ *     <li><b>疑似拦截</b>:命中风控特征先冻结退避({@link RiskSuspectGuard}),到期复测一次;
+ *         再命中才熔断中止整轮;冻结跨越窗口则本轮就地收尾</li>
+ *     <li><b>运行时开关</b>:OFF 只停主动外发(打招呼/索要),检测/附件/评分/拉推荐照常</li>
+ *     <li><b>冷却窗口</b>:熔断恢复后 {@code riskCooldownMinutes} 内暂停外发并先轻探测;轮次同样按节拍跑</li>
+ *     <li><b>防重叠</b>:岗位已有 QUEUED/RUNNING 任务则跳过拉新;轮次级互斥(定时重叠跳过、手动触发拒绝)</li>
+ *     <li><b>手动补跑</b>:运行中拒绝;空闲触发按 min(平摊窗口, 距下一整点-10 分钟) 平摊,不足 10 分钟拒绝</li>
+ *     <li>每轮结束写入运行摘要({@code auto_recruit.last_run})与轮次历史({@code auto_recruit_round})</li>
  * </ul>
  */
 @Slf4j
@@ -57,6 +75,8 @@ public class AutoRecruitScheduler {
     /** 运行时段首/末整点(与 cron 9-18 对齐,nextRunAt 计算用) */
     private static final int FIRST_HOUR = 9;
     private static final int LAST_HOUR = 18;
+    /** 等待类睡眠的分段粒度(毫秒):保证墙钟判定与收尾响应的及时性 */
+    private static final long SLEEP_CHUNK_MILLIS = 60_000;
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
@@ -70,16 +90,42 @@ public class AutoRecruitScheduler {
     private final ChatPollService chatPollService;
     private final AutoRecruitSettingService settingService;
     private final AutoRecruitRoundMapper roundMapper;
+    private final RiskSuspectGuard riskSuspectGuard;
 
     /** 轮次互斥:同一时刻仅允许一轮(定时重叠跳过,手动触发拒绝) */
     private final AtomicBoolean running = new AtomicBoolean(false);
     private volatile LocalDateTime runningSince;
 
+    /** 测试接缝:时间源(生产=系统时钟;同包测试可替换为虚拟时钟) */
+    Supplier<LocalDateTime> clock = () -> LocalDateTime.now(ZONE);
+
+    /** 测试接缝:睡眠器(生产=真实睡眠;同包测试可替换为"仅推进虚拟时钟") */
+    Sleeper sleeper = millis -> {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    };
+
+    /** 睡眠器接口(不抛中断:由实现方恢复中断标记) */
+    @FunctionalInterface
+    interface Sleeper {
+        void sleep(long millis);
+    }
+
+    /** 可抛异常的动作(单元执行体) */
+    @FunctionalInterface
+    private interface UnitAction {
+        void run() throws Exception;
+    }
+
     public AutoRecruitScheduler(HrAgentProperties properties, LiepinAccountMapper accountMapper,
                                 JdMapper jdMapper, SearchTaskMapper searchTaskMapper,
                                 SearchTaskService searchTaskService, ScoringEngine scoringEngine,
                                 GreetingService greetingService, ChatPollService chatPollService,
-                                AutoRecruitSettingService settingService, AutoRecruitRoundMapper roundMapper) {
+                                AutoRecruitSettingService settingService, AutoRecruitRoundMapper roundMapper,
+                                RiskSuspectGuard riskSuspectGuard) {
         this.properties = properties;
         this.accountMapper = accountMapper;
         this.jdMapper = jdMapper;
@@ -90,22 +136,23 @@ public class AutoRecruitScheduler {
         this.chatPollService = chatPollService;
         this.settingService = settingService;
         this.roundMapper = roundMapper;
+        this.riskSuspectGuard = riskSuspectGuard;
     }
 
-    /** 每天 09:00–18:00 每整点触发一轮(周末与节假日同样执行) */
+    /** 每天 09:00–18:00 每整点启动一轮(周末与节假日同样执行) */
     @Scheduled(cron = "0 0 9-18 * * *", zone = "Asia/Shanghai")
     public void hourly() {
         runRound();
     }
 
-    /** 执行一轮(对外可直调;时间取北京时间当前时刻) */
+    /** 执行一轮(对外可直调;时间取当前时刻) */
     public void runRound() {
-        runRound(LocalDateTime.now(ZONE));
+        runRound(clock.get());
     }
 
     /**
-     * 定时执行一轮(时间可注入,便于测试边界)。
-     * 顺序:时段门禁 → 互斥检查 → 执行;运行时开关在轮次内判定(只决定是否外发)。
+     * 定时执行一轮:时段门禁 → 互斥检查 → 按平摊窗口执行。
+     * 窗口 = 启动时刻 + {@code spreadMinutes}(默认 50 分钟,整点启动即 :00→:50)。
      */
     void runRound(LocalDateTime now) {
         if (!isRunWindow(now)) {
@@ -116,28 +163,36 @@ public class AutoRecruitScheduler {
             log.warn("自动招聘:上一轮仍在运行,本轮跳过(防重叠)");
             return;
         }
-        executeRound();
+        executeRound(now, now.plusMinutes(spreadMinutes()));
     }
 
     /**
-     * 手动执行一轮(ADMIN 补跑/联调):绕过时段门禁、不受外发开关限制(手动操作永远可用),
-     * 但仍受轮次互斥约束——已有轮次运行中则拒绝。
+     * 手动执行一轮(ADMIN 补跑/联调):绕过时段门禁、不受外发开关限制,
+     * 但仍受轮次互斥约束——已有轮次运行中则拒绝(长轮次期间不再允许插队)。
+     * 窗口 = min(平摊窗口, 距下一整点 10 分钟缓冲),不足 10 分钟拒绝。
      */
     public void runRoundInternal() {
         if (running.get()) {
             throw BizException.badRequest("已有轮次正在运行,请稍后再试");
         }
-        executeRound();
+        LocalDateTime start = clock.get();
+        LocalDateTime spreadEnd = start.plusMinutes(spreadMinutes());
+        LocalDateTime hourGuard = start.truncatedTo(ChronoUnit.HOURS).plusHours(1).minusMinutes(10);
+        LocalDateTime deadline = spreadEnd.isBefore(hourGuard) ? spreadEnd : hourGuard;
+        if (Duration.between(start, deadline).toMinutes() < 10) {
+            throw BizException.badRequest("距离下一整点不足 10 分钟,请稍后再补跑");
+        }
+        executeRound(start, deadline);
     }
 
     /**
-     * 单轮编排主体。
-     * 运行时开关语义(2026-09-26):OFF 只停主动外发(打招呼;索要门禁在 ChatPollService 内),
-     * 检测回复/已读、附件下载、评分、拉推荐照常;每轮结束写运行摘要。
+     * 单轮编排主体(节拍循环)。
+     * 运行时开关语义:OFF 只停主动外发(打招呼;索要门禁在 ChatPollService 内),
+     * 检测回复/已读、附件下载、评分、拉推荐照常;每轮结束写运行摘要与轮次历史。
      */
-    private void executeRound() {
+    private void executeRound(LocalDateTime startAt, LocalDateTime deadline) {
         running.set(true);
-        runningSince = LocalDateTime.now(ZONE);
+        runningSince = startAt;
         boolean enabled = settingService.isEnabled();
         RoundStats stats = new RoundStats(enabled ? "full" : "collectOnly");
         try {
@@ -152,74 +207,83 @@ public class AutoRecruitScheduler {
                 return;
             }
 
-            // 熔断恢复冷却期(2026-09-28 治理):暂停主动外发,先轻探测确认平台已恢复;
-            // 被跳验证页会抛 RISK_CONTROL → 既有熔断链路处理,本轮立即停止(不自伤)
+            // 冷却期(熔断恢复后):暂停主动外发,先轻探测确认平台已恢复;轮次仍按节拍跑(只收不发)
+            boolean cooling = false;
             if (settingService.isCoolingDown(account)) {
+                cooling = true;
                 enabled = false;
                 stats.setMode("cooling");
-                log.info("账号 {} 处于熔断冷却期(重置于 {}),本轮暂停外发并轻探测",
-                        account.getId(), account.getRiskResetAt());
-                chatPollService.probeAccount(account,
-                        Duration.ofMinutes(properties.getLiepin().getShortTimeoutMinutes()));
+                log.info("账号 {} 处于熔断冷却期(重置于 {}),本轮暂停外发并轻探测", account.getId(),
+                        account.getRiskResetAt());
             }
-            // 轮内简历详情读取预算重置(读取量是平台足迹大头,2026-09-28)
             scoringEngine.beginRound();
+            chatPollService.beginRound();
 
-            // 步骤 1:先处理来信与附件(被动通道;外发开关 OFF 时其内部跳过打招呼/索要类外发)
-            try {
-                stats.polled = chatPollService.poll();
-            } catch (CliException e) {
-                if (e.getType() == CliException.Type.RISK_CONTROL) {
-                    stats.riskStopped = true;
-                }
-                throw e;
-            }
-
-            // 步骤 2/3:遍历「在招且已关联有效猎聘职位」的岗位
-            List<Jd> jds = jdMapper.selectList(new LambdaQueryWrapper<Jd>()
+            List<Jd> validJds = new ArrayList<>();
+            for (Jd jd : jdMapper.selectList(new LambdaQueryWrapper<Jd>()
                     .eq(Jd::getStatus, "ACTIVE")
                     .isNotNull(Jd::getLiepinJobId)
                     .ne(Jd::getLiepinJobId, "")
-                    .orderByAsc(Jd::getId));
-            for (Jd jd : jds) {
+                    .orderByAsc(Jd::getId))) {
                 if (jd.getLiepinJobId() == null || !jd.getLiepinJobId().matches("[1-9]\\d*")) {
                     log.debug("自动招聘:岗位 {} 猎聘职位 ID 无效({}),跳过", jd.getId(), jd.getLiepinJobId());
                     continue;
                 }
-                try {
-                    // 步骤 2:先消费存量——补评分(职能门禁+AI) → PASS 未联系者打招呼(含门槛/去重/节奏门禁)
-                    stats.scored += scoringEngine.scorePending(jd.getId());
-                    if (enabled) {
-                        stats.greeted += greetingService.greetPassed(jd.getId(),
-                                properties.getAutoRecruit().getGreetBatchLimit());
-                    } else {
-                        log.debug("自动招聘:外发已关闭,岗位 {} 跳过打招呼(攒着,开关恢复后补做)", jd.getId());
-                    }
-
-                    // 步骤 3:再拉新推荐(该岗位已有在途任务则跳过,防重叠)
-                    if (hasActiveTask(jd.getId())) {
-                        log.info("自动招聘:岗位 {} 已有在途(QUEUED/RUNNING)任务,本轮跳过拉新", jd.getId());
-                        continue;
-                    }
-                    searchTaskService.createRecommendTask(jd.getId(), account.getId());
-                    stats.recommended++;
-                } catch (CliException e) {
-                    // 风控/登录失效类:记录并以异常上抛,由既有熔断链路处理,停止本轮
-                    if (e.getType() == CliException.Type.RISK_CONTROL) {
-                        log.error("自动招聘:岗位 {} 触发风控,本轮立即停止", jd.getId(), e);
-                        stats.riskStopped = true;
-                        throw e;
-                    }
-                    stats.errors++;
-                    log.warn("自动招聘:岗位 {} 处理失败,跳过: {}", jd.getId(), e.getMessage());
-                } catch (Exception e) {
-                    // 单岗位失败不阻断其他岗位
-                    stats.errors++;
-                    log.warn("自动招聘:岗位 {} 处理异常,跳过: {}", jd.getId(), e.getMessage(), e);
-                }
+                validJds.add(jd);
             }
+            RoundWork work = new RoundWork(validJds);
+
+            // 冷却期先轻探测一次(疑似拦截按冻结-复测策略处理;冻结跨越窗口则本轮收尾)
+            if (cooling && runActionWithRiskPolicy(
+                    () -> chatPollService.probeAccount(account, shortTimeout()),
+                    stats, account, deadline) == ActionResult.ABORTED) {
+                stats.abandoned = work.openUnits();
+                log.warn("自动招聘:冷却轻探测的冻结跨越平摊窗口,本轮收尾");
+                return;
+            }
+
+            // 节拍循环:一 tick 一动作,自适应间隔铺满窗口
+            while (true) {
+                if (Thread.currentThread().isInterrupted()) {
+                    log.warn("自动招聘:轮次线程被中断,提前收尾");
+                    stats.abandoned = work.openUnits();
+                    break;
+                }
+                LocalDateTime now = clock.get();
+                if (!now.isBefore(deadline)) {
+                    stats.abandoned = work.openUnits();
+                    log.info("自动招聘:平摊窗口结束({}),剩余单元 {} 个顺延下轮", now, stats.abandoned);
+                    break;
+                }
+                Unit unit = work.nextUnit(now, enabled);
+                if (unit == null) {
+                    if (work.drainedForWindow(deadline, enabled)) {
+                        log.info("自动招聘:本轮动作已全部完成,提前收尾");
+                        break;
+                    }
+                    long waitMs = Math.min(work.msUntilNextEligible(now),
+                            Math.max(1, Duration.between(now, deadline).toMillis()));
+                    sleepUntil(now.plusNanos(waitMs * 1_000_000L), deadline);
+                    continue;
+                }
+                if (!executeUnit(unit, work, stats, account, deadline)) {
+                    stats.abandoned = work.openUnits();
+                    log.warn("自动招聘:疑似拦截冻结跨越平摊窗口,本轮收尾");
+                    break;
+                }
+                sleepPaced(work, deadline);
+            }
+        } catch (CliException e) {
+            if (e.getType() == CliException.Type.RISK_CONTROL) {
+                // 真实熔断(复测再次命中/退避关闭):中止整轮并上抛(既有链路已标记账号)
+                stats.riskStopped = true;
+            }
+            throw e;
+        } catch (Exception e) {
+            // 长轮次的兜底:非平台级异常不中断轮次收尾(摘要/历史照写)
+            log.error("自动招聘:轮次内部异常,提前结束", e);
         } finally {
-            LocalDateTime finishedAt = LocalDateTime.now(ZONE);
+            LocalDateTime finishedAt = clock.get();
             LocalDateTime startedAt = runningSince;
             running.set(false);
             runningSince = null;
@@ -249,6 +313,381 @@ public class AutoRecruitScheduler {
             log.info("自动招聘本轮结束: {}", stats.summaryText());
         }
     }
+
+    // ---------- 节拍:间隔与睡眠 ----------
+
+    /**
+     * 节拍间隔:自适应 = clamp(剩余窗口毫秒 / 剩余单元数, paceMillis, maxPaceMillis)。
+     * 单位少则更慢(铺满窗口),单位多则取提速下限 paceMillis;睡至目标时刻或窗口截止。
+     */
+    private void sleepPaced(RoundWork work, LocalDateTime deadline) {
+        LocalDateTime now = clock.get();
+        long remaining = Duration.between(now, deadline).toMillis();
+        if (remaining <= 0) {
+            return;
+        }
+        int open = Math.max(1, work.openUnits());
+        long gap = Math.min(maxPaceMillis(), Math.max(paceMillis(), remaining / open));
+        sleepUntil(now.plusNanos(gap * 1_000_000L), deadline);
+    }
+
+    /** 分段睡眠至目标时刻(不越过 deadline;每段 ≤60s 保证墙钟判定与睡醒后的及时收尾) */
+    private void sleepUntil(LocalDateTime target, LocalDateTime deadline) {
+        LocalDateTime limit = target.isBefore(deadline) ? target : deadline;
+        while (clock.get().isBefore(limit)) {
+            if (Thread.currentThread().isInterrupted()) {
+                return;
+            }
+            long ms = Math.min(SLEEP_CHUNK_MILLIS, Duration.between(clock.get(), limit).toMillis());
+            if (ms <= 0) {
+                return;
+            }
+            sleeper.sleep(ms);
+        }
+    }
+
+    // ---------- 单元执行 ----------
+
+    /**
+     * 执行一个单元;返回 false=疑似拦截的冻结跨越平摊窗口、轮次应就地收尾。
+     * 真实熔断(复测再次命中/退避关闭)会以 CliException(RISK_CONTROL) 上抛中止整轮。
+     */
+    private boolean executeUnit(Unit unit, RoundWork work, RoundStats stats,
+                                LiepinAccount account, LocalDateTime deadline) {
+        switch (unit.type) {
+            case POLL_LIST -> {
+                AtomicReference<List<JsonNode>> fetched = new AtomicReference<>();
+                ActionResult result = runActionWithRiskPolicy(
+                        () -> fetched.set(chatPollService.fetchSessions(account)), stats, account, deadline);
+                if (result == ActionResult.ABORTED) {
+                    return false;
+                }
+                work.lastPollListAt = clock.get();
+                List<JsonNode> sessions = fetched.get();
+                if (sessions != null) {
+                    for (JsonNode session : sessions) {
+                        String imId = session.path("im_id").asText("");
+                        if (imId.isEmpty() || work.processedSessions.contains(imId)) {
+                            continue;
+                        }
+                        work.pendingSessions.addLast(session);
+                    }
+                }
+            }
+            case POLL_SESSION -> {
+                AtomicBoolean acted = new AtomicBoolean(false);
+                ActionResult result = runActionWithRiskPolicy(
+                        () -> acted.set(chatPollService.handleSession(account, unit.session)), stats, account, deadline);
+                if (result == ActionResult.ABORTED) {
+                    return false;
+                }
+                String imId = unit.session.path("im_id").asText("");
+                if (!imId.isEmpty()) {
+                    work.processedSessions.add(imId);
+                }
+                if (acted.get()) {
+                    stats.polled++;
+                }
+            }
+            case GREET -> {
+                AtomicInteger sent = new AtomicInteger(0);
+                ActionResult result = runActionWithRiskPolicy(
+                        () -> sent.set(greetingService.greetPassed(unit.jd.getId(), 1)), stats, account, deadline);
+                if (result == ActionResult.ABORTED) {
+                    return false;
+                }
+                if (result == ActionResult.DONE && sent.get() > 0) {
+                    stats.greeted += sent.get();
+                    work.greetCount.merge(unit.jd.getId(), 1, Integer::sum);
+                } else {
+                    // 无待联系候选/执行失败:本轮该岗不再尝试(下一轮/开关恢复后自然补做)
+                    work.greetDone.put(unit.jd.getId(), true);
+                }
+            }
+            case READ -> {
+                AtomicInteger scored = new AtomicInteger(-1);
+                ActionResult result = runActionWithRiskPolicy(
+                        () -> scored.set(scoringEngine.scoreNext(unit.jd.getId(), 1)), stats, account, deadline);
+                if (result == ActionResult.ABORTED) {
+                    return false;
+                }
+                if (result == ActionResult.DONE) {
+                    stats.scored += Math.max(0, scored.get());
+                    if (scored.get() <= 0) {
+                        // 无待评分候选或读取预算用尽:本轮该岗读数结束
+                        work.readDone.put(unit.jd.getId(), true);
+                    }
+                } else {
+                    work.readDone.put(unit.jd.getId(), true);
+                }
+            }
+            case RECOMMEND_CREATE -> {
+                // 防重叠:已有在途任务 → 记已处理,不重复创建
+                if (hasActiveTask(unit.jd.getId())) {
+                    log.info("自动招聘:岗位 {} 已有在途(QUEUED/RUNNING)任务,本轮跳过拉新", unit.jd.getId());
+                    work.taskDone.put(unit.jd.getId(), true);
+                    return true;
+                }
+                AtomicBoolean created = new AtomicBoolean(false);
+                ActionResult result = runActionWithRiskPolicy(() -> {
+                    searchTaskService.createRecommendTask(unit.jd.getId(), account.getId());
+                    created.set(true);
+                }, stats, account, deadline);
+                if (result == ActionResult.ABORTED) {
+                    return false;
+                }
+                if (result == ActionResult.DONE) {
+                    if (created.get()) {
+                        stats.recommended++;
+                        work.lastRecommendCreateAt = clock.get();
+                    }
+                    work.taskDone.put(unit.jd.getId(), true);
+                } else {
+                    work.taskDone.put(unit.jd.getId(), true);
+                }
+            }
+            default -> {
+                // 不可达
+            }
+        }
+        return true;
+    }
+
+    /** 单元执行结果 */
+    private enum ActionResult {
+        /** 正常完成(含首次命中→冻结→复测通过的路径) */
+        DONE,
+        /** 非风控失败(已计入 errors,跳过该单元) */
+        FAILED,
+        /** 疑似拦截冻结跨越平摊窗口,轮次就地收尾 */
+        ABORTED
+    }
+
+    /**
+     * 执行动作并按"冻结-复测一次"语义处理风控命中(见 {@link RiskSuspectGuard}):
+     * 首次命中 → 冻结退避(全平台操作暂停)→ 到期重放该动作一次(复测);
+     * 复测成功 → 继续本轮;复测再次命中 → 置 riskStopped 并上抛(真实熔断)。
+     */
+    private ActionResult runActionWithRiskPolicy(UnitAction action, RoundStats stats,
+                                                 LiepinAccount account, LocalDateTime deadline) {
+        try {
+            action.run();
+            return ActionResult.DONE;
+        } catch (CliException e) {
+            if (e.getType() != CliException.Type.RISK_CONTROL) {
+                stats.errors++;
+                log.warn("自动招聘:动作执行失败,跳过: {}", e.getMessage());
+                return ActionResult.FAILED;
+            }
+            if (!riskSuspectGuard.isHolding(account.getId())) {
+                // 无冻结态伴随的风控异常(复测再次命中/退避关闭)→ 真实熔断:中止整轮
+                stats.riskStopped = true;
+                throw e;
+            }
+            // 首次命中:冻结退避,到期复测一次
+            stats.suspects++;
+            LocalDateTime holdUntil = riskSuspectGuard.holdUntil(account.getId());
+            log.warn("自动招聘:疑似风控拦截,冻结退避至 {}(期间暂停全部平台操作,到期复测一次): {}",
+                    holdUntil, e.getMessage());
+            if (holdUntil == null) {
+                stats.riskStopped = true;
+                throw e;
+            }
+            sleepUntil(holdUntil, deadline);
+            if (clock.get().isBefore(holdUntil)) {
+                return ActionResult.ABORTED;
+            }
+            try {
+                action.run();   // 复测(冻结解除后的第一个平台操作)
+                return ActionResult.DONE;
+            } catch (CliException retry) {
+                if (retry.getType() == CliException.Type.RISK_CONTROL) {
+                    stats.riskStopped = true;
+                    throw retry;
+                }
+                stats.errors++;
+                log.warn("自动招聘:复测执行失败,跳过: {}", retry.getMessage());
+                return ActionResult.FAILED;
+            } catch (Exception retry) {
+                stats.errors++;
+                log.warn("自动招聘:复测执行异常,跳过: {}", retry.getMessage(), retry);
+                return ActionResult.FAILED;
+            }
+        } catch (Exception e) {
+            stats.errors++;
+            log.warn("自动招聘:动作执行异常,跳过: {}", e.getMessage(), e);
+            return ActionResult.FAILED;
+        }
+    }
+
+    // ---------- 轮内工作队列 ----------
+
+    /** 节拍单元类型(优先级即声明顺序的消费顺序) */
+    private enum UnitType {
+        POLL_SESSION, POLL_LIST, GREET, READ, RECOMMEND_CREATE
+    }
+
+    /** 单个节拍单元 */
+    private static final class Unit {
+
+        private final UnitType type;
+        private final Jd jd;
+        private final JsonNode session;
+
+        private Unit(UnitType type, Jd jd, JsonNode session) {
+            this.type = type;
+            this.jd = jd;
+            this.session = session;
+        }
+
+        static Unit session(JsonNode session) {
+            return new Unit(UnitType.POLL_SESSION, null, session);
+        }
+
+        static Unit pollList() {
+            return new Unit(UnitType.POLL_LIST, null, null);
+        }
+
+        static Unit greet(Jd jd) {
+            return new Unit(UnitType.GREET, jd, null);
+        }
+
+        static Unit read(Jd jd) {
+            return new Unit(UnitType.READ, jd, null);
+        }
+
+        static Unit create(Jd jd) {
+            return new Unit(UnitType.RECOMMEND_CREATE, jd, null);
+        }
+    }
+
+    /**
+     * 轮内工作队列:按优先级挑选下一个可执行单元,并维护每岗位/每会话的完成标记与门禁时刻。
+     * 优先级:会话处理 &gt; 列表刷新 &gt; 打招呼 &gt; 简历读取 &gt; 推荐创建。
+     */
+    private final class RoundWork {
+
+        private final List<Jd> jds;
+        /** 会话列表(含未处理会话;拉取后按 imId 去重入队) */
+        private final Deque<JsonNode> pendingSessions = new ArrayDeque<>();
+        /** 本轮已处理过的会话 imId(列表多次刷新不重复处理) */
+        private final Set<String> processedSessions = new HashSet<>();
+        private final Map<Long, Boolean> readDone = new HashMap<>();
+        private final Map<Long, Integer> greetCount = new HashMap<>();
+        private final Map<Long, Boolean> greetDone = new HashMap<>();
+        private final Map<Long, Boolean> taskDone = new HashMap<>();
+        private LocalDateTime lastPollListAt;
+        private LocalDateTime lastRecommendCreateAt;
+
+        private RoundWork(List<Jd> jds) {
+            this.jds = jds;
+        }
+
+        /** 挑选下一个可执行单元;无可执行返回 null(可能等待门禁或已全部完成) */
+        private Unit nextUnit(LocalDateTime now, boolean enabled) {
+            // ① 会话处理(被动通道,时效优先)
+            if (!pendingSessions.isEmpty()) {
+                return Unit.session(pendingSessions.pollFirst());
+            }
+            // ② 会话列表刷新(周期;新来信进入当轮队列)
+            if (lastPollListAt == null || Duration.between(lastPollListAt, now)
+                    .compareTo(Duration.ofMinutes(pollListIntervalMinutes())) >= 0) {
+                return Unit.pollList();
+            }
+            // ③ 打招呼(外发;单岗上限由轮内计数控制,发送节奏由 AccountPaceGuard 保证)
+            if (enabled) {
+                for (Jd jd : jds) {
+                    if (Boolean.TRUE.equals(greetDone.get(jd.getId()))) {
+                        continue;
+                    }
+                    if (greetCount.getOrDefault(jd.getId(), 0) >= greetBatchLimit()) {
+                        greetDone.put(jd.getId(), true);
+                        continue;
+                    }
+                    return Unit.greet(jd);
+                }
+            }
+            // ④ 简历读取(轮内总预算/单岗预算由 ScoringEngine 控制)
+            for (Jd jd : jds) {
+                if (!Boolean.TRUE.equals(readDone.get(jd.getId()))) {
+                    return Unit.read(jd);
+                }
+            }
+            // ⑤ 推荐创建(全局最小间隔门禁,防创建扎堆)
+            if (lastRecommendCreateAt == null || Duration.between(lastRecommendCreateAt, now)
+                    .compareTo(Duration.ofMinutes(recommendGapMinutes())) >= 0) {
+                for (Jd jd : jds) {
+                    if (!Boolean.TRUE.equals(taskDone.get(jd.getId()))) {
+                        return Unit.create(jd);
+                    }
+                }
+            }
+            return null;
+        }
+
+        /** 是否已可在本窗口内收尾(全部消费完且窗口内无后续刷新点) */
+        private boolean drainedForWindow(LocalDateTime deadline, boolean enabled) {
+            if (!pendingSessions.isEmpty() || lastPollListAt == null) {
+                return false;
+            }
+            LocalDateTime nextPoll = lastPollListAt.plusMinutes(pollListIntervalMinutes());
+            if (!nextPoll.isAfter(deadline)) {
+                return false;
+            }
+            for (Jd jd : jds) {
+                if (!Boolean.TRUE.equals(readDone.get(jd.getId()))) {
+                    return false;
+                }
+                if (!Boolean.TRUE.equals(taskDone.get(jd.getId()))) {
+                    return false;
+                }
+                if (enabled && !Boolean.TRUE.equals(greetDone.get(jd.getId()))) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        /** 距下一个门禁解锁的等待毫秒(所有可执行单元都被门禁挡住的场景) */
+        private long msUntilNextEligible(LocalDateTime now) {
+            long wait = Long.MAX_VALUE;
+            if (lastPollListAt != null) {
+                LocalDateTime nextPoll = lastPollListAt.plusMinutes(pollListIntervalMinutes());
+                wait = Math.min(wait, Math.max(0, Duration.between(now, nextPoll).toMillis()));
+            }
+            boolean createPending = false;
+            for (Jd jd : jds) {
+                if (!Boolean.TRUE.equals(taskDone.get(jd.getId()))) {
+                    createPending = true;
+                    break;
+                }
+            }
+            if (createPending && lastRecommendCreateAt != null) {
+                LocalDateTime nextCreate = lastRecommendCreateAt.plusMinutes(recommendGapMinutes());
+                wait = Math.min(wait, Math.max(0, Duration.between(now, nextCreate).toMillis()));
+            }
+            return wait == Long.MAX_VALUE ? SLEEP_CHUNK_MILLIS : wait;
+        }
+
+        /** 剩余单元估算(节拍自适应用;仅粗估,防止间隔过疏/过密) */
+        private int openUnits() {
+            int count = pendingSessions.size();
+            for (Jd jd : jds) {
+                if (!Boolean.TRUE.equals(readDone.get(jd.getId()))) {
+                    count++;
+                }
+                if (!Boolean.TRUE.equals(greetDone.get(jd.getId()))) {
+                    count++;
+                }
+                if (!Boolean.TRUE.equals(taskDone.get(jd.getId()))) {
+                    count++;
+                }
+            }
+            return count;
+        }
+    }
+
+    // ---------- 既有工具方法 ----------
 
     /** 该岗位是否已有排队/运行中的任务(防重叠) */
     private boolean hasActiveTask(Long jdId) {
@@ -297,6 +736,36 @@ public class AutoRecruitScheduler {
         return day.plusDays(1).atTime(FIRST_HOUR, 0);
     }
 
+    // ---------- 配置快捷取值 ----------
+
+    private int spreadMinutes() {
+        return Math.max(1, properties.getAutoRecruit().getSpreadMinutes());
+    }
+
+    private long paceMillis() {
+        return Math.max(0, properties.getAutoRecruit().getPaceMillis());
+    }
+
+    private long maxPaceMillis() {
+        return Math.max(paceMillis(), properties.getAutoRecruit().getMaxPaceMillis());
+    }
+
+    private int pollListIntervalMinutes() {
+        return Math.max(1, properties.getAutoRecruit().getPollListIntervalMinutes());
+    }
+
+    private int recommendGapMinutes() {
+        return Math.max(0, properties.getAutoRecruit().getRecommendGapMinutes());
+    }
+
+    private int greetBatchLimit() {
+        return Math.max(0, properties.getAutoRecruit().getGreetBatchLimit());
+    }
+
+    private Duration shortTimeout() {
+        return Duration.ofMinutes(properties.getLiepin().getShortTimeoutMinutes());
+    }
+
     /** 单轮运行统计(写入 auto_recruit.last_run 摘要;mode 可变:冷却期切换为 cooling,2026-09-28) */
     private static final class RoundStats {
 
@@ -308,6 +777,10 @@ public class AutoRecruitScheduler {
         private int greeted;
         private int recommended;
         private int errors;
+        /** 疑似拦截冻结次数(2026-09-28 节拍改造) */
+        private int suspects;
+        /** 平摊窗口结束/冻结跨窗时未完成而顺延下轮的单元数(2026-09-28 节拍改造) */
+        private int abandoned;
 
         private RoundStats(String mode) {
             this.mode = mode;
@@ -328,6 +801,8 @@ public class AutoRecruitScheduler {
             node.put("recommended", recommended);
             node.put("errors", errors);
             node.put("riskStopped", riskStopped);
+            node.put("suspects", suspects);
+            node.put("abandoned", abandoned);
             return node.toString();
         }
 
@@ -335,7 +810,9 @@ public class AutoRecruitScheduler {
             return "mode=" + mode + ", polled=" + polled + ", scored=" + scored
                     + ", greeted=" + greeted + ", recommended=" + recommended
                     + ", errors=" + errors + (noAccount ? ", noAccount" : "")
-                    + (riskStopped ? ", riskStopped" : "");
+                    + (riskStopped ? ", riskStopped" : "")
+                    + (suspects > 0 ? ", suspects=" + suspects : "")
+                    + (abandoned > 0 ? ", abandoned=" + abandoned : "");
         }
     }
 }

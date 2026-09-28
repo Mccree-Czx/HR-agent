@@ -31,12 +31,14 @@ public class LiepinCommandService {
     private final LiepinCliExecutor executor;
     private final LiepinAccountMapper accountMapper;
     private final NotifyService notifyService;
+    private final RiskSuspectGuard riskSuspectGuard;
 
     public LiepinCommandService(LiepinCliExecutor executor, LiepinAccountMapper accountMapper,
-                                NotifyService notifyService) {
+                                NotifyService notifyService, RiskSuspectGuard riskSuspectGuard) {
         this.executor = executor;
         this.accountMapper = accountMapper;
         this.notifyService = notifyService;
+        this.riskSuspectGuard = riskSuspectGuard;
     }
 
     /** 搜索人才 → 候选人数组 */
@@ -211,24 +213,33 @@ public class LiepinCommandService {
             markAccountByException(account, e);
             throw e;
         }
+        // 操作成功:若处于"冻结解除待复测"阶段,视为复测通过并清零状态(2026-09-28 节拍改造)
+        riskSuspectGuard.onOpSuccess(account.getId());
         return result;
     }
 
-    /** 异常类型 → 账号状态标记 */
+    /** 异常类型 → 账号状态标记(风控类接入 RiskSuspectGuard:首次命中冻结退避、复测再中才熔断) */
     private void markAccountByException(LiepinAccount account, CliException e) {
         boolean changed = false;
         switch (e.getType()) {
             case RISK_CONTROL -> {
-                if (!Boolean.TRUE.equals(account.getCircuitBreaker())
-                        || !"RESTRICTED".equals(account.getLoginStatus())) {
-                    account.setCircuitBreaker(true);
-                    account.setLoginStatus("RESTRICTED");
-                    changed = true;
+                if (riskSuspectGuard.onRiskHit(account.getId())) {
+                    // 真实熔断(复测再次命中/退避关闭):沿用既有标记+告警链路
+                    if (!Boolean.TRUE.equals(account.getCircuitBreaker())
+                            || !"RESTRICTED".equals(account.getLoginStatus())) {
+                        account.setCircuitBreaker(true);
+                        account.setLoginStatus("RESTRICTED");
+                        changed = true;
+                    }
+                    log.warn("账号 {} 触发熔断: {}", account.getId(), e.getMessage());
+                    notifyService.alert("账号触发风控熔断",
+                            "账号: " + account.getName() + "(id=" + account.getId() + ")\n"
+                                    + "原因: " + e.getMessage() + "\n处理: 停用该账号所有任务,人工确认后重置熔断标记");
+                } else {
+                    // 首次命中:仅冻结退避(全平台操作暂停),等待到期复测;不标记账号、不告警
+                    log.warn("账号 {} 疑似风控拦截,冻结退避至 {}: {}",
+                            account.getId(), riskSuspectGuard.holdUntil(account.getId()), e.getMessage());
                 }
-                log.warn("账号 {} 触发熔断: {}", account.getId(), e.getMessage());
-                notifyService.alert("账号触发风控熔断",
-                        "账号: " + account.getName() + "(id=" + account.getId() + ")\n"
-                                + "原因: " + e.getMessage() + "\n处理: 停用该账号所有任务,人工确认后重置熔断标记");
             }
             case NOT_LOGGED_IN -> {
                 if (!"NEED_SCAN".equals(account.getLoginStatus())) {

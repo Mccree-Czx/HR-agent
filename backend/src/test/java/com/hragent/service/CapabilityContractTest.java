@@ -28,9 +28,11 @@ class CapabilityContractTest {
     private final GreetingRecordMapper greetings = mock(GreetingRecordMapper.class);
     private final TaskQueueService queue = mock(TaskQueueService.class);
     private final NotifyService notify = mock(NotifyService.class);
-    private final LiepinCommandService commands = new LiepinCommandService(executor, accounts, notify);
+    private final HrAgentProperties props = new HrAgentProperties();
+    private final RiskSuspectGuard guard = new RiskSuspectGuard(props);
+    private final LiepinCommandService commands = new LiepinCommandService(executor, accounts, notify, guard);
     private final SearchTaskService search = new SearchTaskService(tasks, jobs, accounts, candidates,
-            commands, queue, new HrAgentProperties(), notify);
+            commands, queue, props, notify, guard);
     private final ResumeCollectService collect = new ResumeCollectService(greetings, candidates, accounts,
             mock(ResumeFileMapper.class), commands, mock(StorageService.class), jobs);
     private LiepinAccount account;

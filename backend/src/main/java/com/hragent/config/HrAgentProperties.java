@@ -143,6 +143,24 @@ public class HrAgentProperties {
 
         /** 熔断恢复(重置)后的冷却窗口(分钟):窗口内暂停主动外发并轻探测;0=关闭该机制(2026-09-28) */
         private int riskCooldownMinutes = 120;
+
+        /** 平摊窗口(分钟):整点轮次在窗口内匀速执行全部平台动作,到期未完成顺延下轮(2026-09-28 节拍改造) */
+        private int spreadMinutes = 50;
+
+        /** 相邻两个动作的最小间隔(毫秒;自适应节拍的提速下限,2026-09-28) */
+        private int paceMillis = 30_000;
+
+        /** 相邻两个动作的最大间隔(毫秒;自适应节拍的降速上限,防止动作过度稀疏,2026-09-28) */
+        private int maxPaceMillis = 120_000;
+
+        /** 轮内会话列表刷新间隔(分钟;刷新后新来信进入当轮处理队列,2026-09-28) */
+        private int pollListIntervalMinutes = 15;
+
+        /** 推荐任务创建/执行的最小间隔(分钟;防"任务接力"暴发,2026-09-28) */
+        private int recommendGapMinutes = 8;
+
+        /** 疑似拦截冻结退避时长(分钟):首次命中冻结,到期复测一次;0=回退"立即熔断"(2026-09-28) */
+        private int riskProbeBackoffMinutes = 15;
     }
 
     @Data
