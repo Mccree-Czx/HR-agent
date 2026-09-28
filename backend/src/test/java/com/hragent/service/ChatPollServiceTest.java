@@ -644,7 +644,7 @@ class ChatPollServiceTest {
         verify(commandService).requestResume(any(), eq("r-im1"), any(), any());
     }
 
-    // ---------- 熔断治理:轮内索要预算与冷却窗口(2026-09-28) ----------
+    // ---------- 熔断治理:轮内索要预算(2026-09-28) ----------
 
     @Test
     void askBudgetCapsAutomaticAsksPerPoll() throws Exception {
@@ -673,22 +673,25 @@ class ChatPollServiceTest {
     }
 
     @Test
-    void coolingWindowBlocksAutomaticAsks() throws Exception {
+    void resetStateDoesNotBlockAutomaticAsks() throws Exception {
         Jd jd = confirmedJd("招聘主管", "88888");
         Candidate candidate = knownCandidate("im1", "张三");
         candidate.setJdId(jd.getId());
         candidateMapper.updateById(candidate);
         GreetingRecord record = greeting(candidate);
-        // 熔断恢复刚发生(冷却窗口内,默认 120 分钟)
+        // 冷却机制已移除(2026-09-28 剔除):历史重置字段不再拦截自动索要
         account.setRiskResetAt(LocalDateTime.now());
         accountMapper.updateById(account);
 
         stubChatlist("{\"im_id\":\"im1\",\"direction\":\"0\",\"raw_metadata\":{\"oppositeRead\":\"1\"}}");
+        when(commandService.requestResume(any(), anyString(), any(), any()))
+                .thenReturn(Optional.of(objectMapper.readTree("{\"success\":true,\"confirmed\":true}")));
 
         chatPollService.pollOnce(account);
 
-        verify(commandService, never()).requestResume(any(), anyString(), any(), any());
-        assertEquals("SENT", greetingMapper.selectById(record.getId()).getStatus(), "冷却期内自动索要应攒着");
+        verify(commandService).requestResume(any(), anyString(), any(), any());
+        assertEquals("REQUESTED", greetingMapper.selectById(record.getId()).getStatus(),
+                "重置时刻不再拦截自动索要");
     }
 
     // ---------- 辅助 ----------

@@ -57,7 +57,6 @@ import java.util.function.Supplier;
  *     <li><b>疑似拦截</b>:命中风控特征先冻结退避({@link RiskSuspectGuard}),到期复测一次;
  *         再命中才熔断中止整轮;冻结跨越窗口则本轮就地收尾</li>
  *     <li><b>运行时开关</b>:OFF 只停主动外发(打招呼/索要),检测/附件/评分/拉推荐照常</li>
- *     <li><b>冷却窗口</b>:熔断恢复后 {@code riskCooldownMinutes} 内暂停外发并先轻探测;轮次同样按节拍跑</li>
  *     <li><b>防重叠</b>:岗位已有 QUEUED/RUNNING 任务则跳过拉新;轮次级互斥(定时重叠跳过、手动触发拒绝)</li>
  *     <li><b>手动补跑</b>:运行中拒绝;空闲触发按 min(平摊窗口, 距下一整点-10 分钟) 平摊,不足 10 分钟拒绝</li>
  *     <li>每轮结束写入运行摘要({@code auto_recruit.last_run})与轮次历史({@code auto_recruit_round})</li>
@@ -210,15 +209,6 @@ public class AutoRecruitScheduler {
                 return;
             }
 
-            // 冷却期(熔断恢复后):暂停主动外发,先轻探测确认平台已恢复;轮次仍按节拍跑(只收不发)
-            boolean cooling = false;
-            if (settingService.isCoolingDown(account)) {
-                cooling = true;
-                enabled = false;
-                stats.setMode("cooling");
-                log.info("账号 {} 处于熔断冷却期(重置于 {}),本轮暂停外发并轻探测", account.getId(),
-                        account.getRiskResetAt());
-            }
             scoringEngine.beginRound();
             chatPollService.beginRound();
 
@@ -235,19 +225,6 @@ public class AutoRecruitScheduler {
                 validJds.add(jd);
             }
             RoundWork work = new RoundWork(validJds);
-
-            // 冷却期先轻探测一次(疑似拦截按冻结-复测策略处理;冻结跨越窗口则本轮收尾)
-            if (cooling && runActionWithRiskPolicy(
-                    () -> chatPollService.probeAccount(account, shortTimeout()),
-                    stats, account, deadline) == ActionResult.ABORTED) {
-                stats.abandoned = work.openUnits();
-                log.warn("自动招聘:冷却轻探测的冻结跨越平摊窗口,本轮收尾");
-                return;
-            }
-            if (cooling) {
-                // 探测已触达平台:先进入节拍再开始单元循环,避免"探测→首次刷新"贴脸连打
-                sleepPaced(work, deadline);
-            }
 
             // 节拍循环:一 tick 一动作,自适应间隔铺满窗口
             while (true) {
@@ -786,7 +763,7 @@ public class AutoRecruitScheduler {
         return Duration.ofMinutes(properties.getLiepin().getShortTimeoutMinutes());
     }
 
-    /** 单轮运行统计(写入 auto_recruit.last_run 摘要;mode 可变:冷却期切换为 cooling,2026-09-28) */
+    /** 单轮运行统计(写入 auto_recruit.last_run 摘要;mode:full/collectOnly) */
     private static final class RoundStats {
 
         private String mode;

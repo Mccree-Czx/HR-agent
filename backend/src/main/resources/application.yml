@@ -53,8 +53,6 @@ hr-agent:
     resume-detail-round-limit: ${AUTO_RECRUIT_RESUME_DETAIL_ROUND_LIMIT:30}
     # 相邻两次简历详情读取的最小间隔(毫秒,读操作轻节流;2026-09-28 由 1000 放缓至 2000)
     resume-detail-interval-millis: ${AUTO_RECRUIT_RESUME_DETAIL_INTERVAL_MILLIS:2000}
-    # 熔断恢复(重置)后的冷却窗口(分钟):窗口内暂停主动外发并轻探测;0=关闭(2026-09-28)
-    risk-cooldown-minutes: ${AUTO_RECRUIT_RISK_COOLDOWN_MINUTES:120}
     # 平摊窗口(分钟):整点轮次在窗口内匀速执行全部动作,到期顺延下轮(2026-09-28 节拍改造)
     spread-minutes: ${AUTO_RECRUIT_SPREAD_MINUTES:50}
     # 相邻动作最小间隔(毫秒;自适应节拍提速下限)

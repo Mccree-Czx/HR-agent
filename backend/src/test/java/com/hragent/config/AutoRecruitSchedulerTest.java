@@ -251,7 +251,6 @@ class AutoRecruitSchedulerTest {
         scheduler.runRound(LocalDateTime.of(2026, 9, 26, 19, 0)); // 周六 19:00(时段外)
 
         verify(chatPollService, never()).fetchSessions(any());
-        verify(chatPollService, never()).probeAccount(any(), any());
         verify(scoringEngine, never()).scoreNext(anyLong(), anyInt());
         verify(greetingService, never()).greetPassed(anyLong(), anyInt());
         verify(searchTaskService, never()).createRecommendTask(anyLong(), anyLong());
@@ -645,23 +644,26 @@ class AutoRecruitSchedulerTest {
         assertNotNull(round.getStatsJson());
     }
 
-    // ---------- 熔断冷却窗口(2026-09-28 治理) ----------
+    // ---------- 冷却机制已移除(2026-09-28 剔除) ----------
 
     @Test
-    void coolingDownRunProbesAndSkipsOutbound() {
+    void recentRiskResetNoLongerBlocksOutbound() {
         Long id = createAccount();
         LiepinAccount account = accountMapper.selectById(id);
-        account.setRiskResetAt(LocalDateTime.now().minusMinutes(5)); // 冷却窗口内(默认 120 分钟)
+        account.setRiskResetAt(LocalDateTime.now().minusMinutes(5)); // 历史字段:不再具备任何门禁语义
         accountMapper.updateById(account);
-        createActiveJd("123");
-        when(chatPollService.fetchSessions(any())).thenReturn(List.of());
+        Jd jd = createActiveJd("123");
+        when(chatPollService.fetchSessions(any())).thenReturn(List.of(
+                sessionNode("s1"), sessionNode("s2")));
+        when(chatPollService.handleSession(any(), any())).thenReturn(true);
+        when(scoringEngine.scoreNext(jd.getId(), 1)).thenReturn(1, 0);
+        when(greetingService.greetPassed(jd.getId(), 1)).thenReturn(1, 0);
 
         scheduler.runRound(WORK_TIME);
 
-        assertEquals("cooling", lastRun().path("mode").asText(),
-                "冷却期内轮次应标记 cooling 模式");
-        verify(chatPollService).probeAccount(any(), any());
-        verify(chatPollService).fetchSessions(any()); // 冷却期仍按节拍跑(只收不发)
-        verify(greetingService, never()).greetPassed(anyLong(), anyInt());
+        JsonNode lastRun = lastRun();
+        assertEquals("full", lastRun.path("mode").asText(), "重置后不再进入冷却模式");
+        assertEquals(2, lastRun.path("polled").asInt());
+        assertEquals(1, lastRun.path("greeted").asInt(), "带近期重置时刻时外发仍正常执行");
     }
 }

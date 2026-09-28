@@ -18,7 +18,7 @@ import java.util.function.Supplier;
  *         期间全平台操作暂停(轮次循环等待、任务调度器不认领),不标记账号、不告警;</li>
  *     <li><b>冻结到期</b> → 第一个平台操作作为"复测":
  *         成功 → 状态清零、恢复原节奏(轮次继续);再次命中 → 走既有真实熔断链路
- *         (RESTRICTED + 告警 + 熔断恢复后进入冷却窗口)。</li>
+ *         (RESTRICTED + 告警)。</li>
  * </ol>
  *
  * <p>{@code riskProbeBackoffMinutes=0} 时回退为"立即熔断"旧语义(逃生阀)。

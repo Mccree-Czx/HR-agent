@@ -144,9 +144,6 @@ public class HrAgentProperties {
         /** 会话列表(chatlist)拉取失败后的轮内重试等待(毫秒,默认 20s;测试置 1) */
         private int pollRetryDelayMillis = 20_000;
 
-        /** 熔断恢复(重置)后的冷却窗口(分钟):窗口内暂停主动外发并轻探测;0=关闭该机制(2026-09-28) */
-        private int riskCooldownMinutes = 120;
-
         /** 平摊窗口(分钟):整点轮次在窗口内匀速执行全部平台动作,到期未完成顺延下轮(2026-09-28 节拍改造) */
         private int spreadMinutes = 50;
 

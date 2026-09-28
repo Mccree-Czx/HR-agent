@@ -26,7 +26,7 @@ public class LiepinAccount {
 
     private Integer dailyGreetQuota;
 
-    /** 熔断恢复(重置)时刻:冷却窗口判断用(2026-09-28) */
+    /** 熔断恢复(重置)时刻:原冷却窗口判断用;冷却机制已于 2026-09-28 移除,字段保留兼容历史数据 */
     private LocalDateTime riskResetAt;
 
     private LocalDateTime createdAt;
