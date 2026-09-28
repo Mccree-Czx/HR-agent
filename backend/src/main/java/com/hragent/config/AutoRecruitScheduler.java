@@ -4,10 +4,12 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.hragent.common.BizException;
+import com.hragent.entity.AutoRecruitRound;
 import com.hragent.entity.Jd;
 import com.hragent.entity.LiepinAccount;
 import com.hragent.entity.SearchTask;
 import com.hragent.executor.CliException;
+import com.hragent.repository.AutoRecruitRoundMapper;
 import com.hragent.repository.JdMapper;
 import com.hragent.repository.LiepinAccountMapper;
 import com.hragent.repository.SearchTaskMapper;
@@ -38,6 +40,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *     <li>防重叠:岗位已有 QUEUED/RUNNING 任务则本轮跳过;轮次级互斥(定时重叠跳过、手动触发拒绝)</li>
  *     <li>异常:单岗位失败不阻断其他岗位;风控类 {@link CliException} 立即停止本轮并上抛(既有熔断链路处理)</li>
  *     <li>每轮结束写入运行摘要({@code auto_recruit.last_run}),供状态接口展示</li>
+ *     <li>每轮结束同时写入轮次历史表 {@code auto_recruit_round}(运行日志页;含手动 run-once)</li>
  * </ul>
  */
 @Slf4j
@@ -65,6 +68,7 @@ public class AutoRecruitScheduler {
     private final GreetingService greetingService;
     private final ChatPollService chatPollService;
     private final AutoRecruitSettingService settingService;
+    private final AutoRecruitRoundMapper roundMapper;
 
     /** 轮次互斥:同一时刻仅允许一轮(定时重叠跳过,手动触发拒绝) */
     private final AtomicBoolean running = new AtomicBoolean(false);
@@ -74,7 +78,7 @@ public class AutoRecruitScheduler {
                                 JdMapper jdMapper, SearchTaskMapper searchTaskMapper,
                                 SearchTaskService searchTaskService, ScoringEngine scoringEngine,
                                 GreetingService greetingService, ChatPollService chatPollService,
-                                AutoRecruitSettingService settingService) {
+                                AutoRecruitSettingService settingService, AutoRecruitRoundMapper roundMapper) {
         this.properties = properties;
         this.accountMapper = accountMapper;
         this.jdMapper = jdMapper;
@@ -84,6 +88,7 @@ public class AutoRecruitScheduler {
         this.greetingService = greetingService;
         this.chatPollService = chatPollService;
         this.settingService = settingService;
+        this.roundMapper = roundMapper;
     }
 
     /** 每天 09:00–18:00 每整点触发一轮(周末与节假日同样执行) */
@@ -200,12 +205,32 @@ public class AutoRecruitScheduler {
                 }
             }
         } finally {
+            LocalDateTime finishedAt = LocalDateTime.now(ZONE);
+            LocalDateTime startedAt = runningSince;
             running.set(false);
             runningSince = null;
             try {
                 settingService.saveLastRun(stats.toJson());
             } catch (Exception e) {
                 log.warn("自动招聘:运行摘要保存失败: {}", e.getMessage());
+            }
+            // 轮次历史落库(运行日志页;失败不影响主流程)
+            try {
+                AutoRecruitRound round = new AutoRecruitRound();
+                round.setStartedAt(startedAt);
+                round.setFinishedAt(finishedAt);
+                round.setMode(stats.mode);
+                round.setPolled(stats.polled);
+                round.setScored(stats.scored);
+                round.setGreeted(stats.greeted);
+                round.setRecommended(stats.recommended);
+                round.setErrors(stats.errors);
+                round.setRiskStopped(stats.riskStopped);
+                round.setNoAccount(stats.noAccount);
+                round.setStatsJson(stats.toJson());
+                roundMapper.insert(round);
+            } catch (Exception e) {
+                log.warn("自动招聘:轮次历史写入失败: {}", e.getMessage());
             }
             log.info("自动招聘本轮结束: {}", stats.summaryText());
         }

@@ -59,6 +59,9 @@ CREATE TABLE IF NOT EXISTS candidate (
     snapshot      TEXT,
     score         INT,
     pass_status   VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    recruit_status VARCHAR(30) NOT NULL DEFAULT 'PENDING_REVIEW',
+    resume_last_viewed_at TIMESTAMP,
+    resume_last_viewed_by BIGINT,
     jd_id         BIGINT,
     created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -133,4 +136,20 @@ CREATE TABLE IF NOT EXISTS app_setting (
     setting_key   VARCHAR(100) PRIMARY KEY,
     setting_value TEXT,
     updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS auto_recruit_round (
+    id           BIGINT AUTO_INCREMENT PRIMARY KEY,
+    started_at   DATETIME,
+    finished_at  DATETIME NOT NULL,
+    mode         VARCHAR(20) NOT NULL,
+    polled       INT NOT NULL DEFAULT 0,
+    scored       INT NOT NULL DEFAULT 0,
+    greeted      INT NOT NULL DEFAULT 0,
+    recommended  INT NOT NULL DEFAULT 0,
+    errors       INT NOT NULL DEFAULT 0,
+    risk_stopped BOOLEAN NOT NULL DEFAULT FALSE,
+    no_account   BOOLEAN NOT NULL DEFAULT FALSE,
+    stats_json   TEXT,
+    created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

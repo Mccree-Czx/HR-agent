@@ -3,11 +3,13 @@ package com.hragent.config;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.hragent.common.BizException;
+import com.hragent.entity.AutoRecruitRound;
 import com.hragent.entity.Jd;
 import com.hragent.entity.LiepinAccount;
 import com.hragent.entity.SearchTask;
 import com.hragent.executor.CliException;
 import com.hragent.repository.AppSettingMapper;
+import com.hragent.repository.AutoRecruitRoundMapper;
 import com.hragent.repository.JdMapper;
 import com.hragent.repository.LiepinAccountMapper;
 import com.hragent.repository.SearchTaskMapper;
@@ -26,9 +28,11 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -70,6 +74,9 @@ class AutoRecruitSchedulerTest {
 
     @Autowired
     private AppSettingMapper settingMapper;
+
+    @Autowired
+    private AutoRecruitRoundMapper roundMapper;
 
     @Autowired
     private AutoRecruitSettingService settingService;
@@ -369,5 +376,30 @@ class AutoRecruitSchedulerTest {
         assertEquals(0, lastRun.path("errors").asInt());
         assertFalse(lastRun.path("riskStopped").asBoolean());
         assertFalse(lastRun.path("noAccount").asBoolean());
+    }
+
+    // ---------- 轮次历史落库(运行日志页,2026-09-28) ----------
+
+    @Test
+    void roundHistoryRecordedAfterRun() {
+        createAccount();
+        Jd jd = createActiveJd("123");
+        when(chatPollService.poll()).thenReturn(4);
+        when(scoringEngine.scorePending(jd.getId())).thenReturn(1);
+        when(greetingService.greetPassed(jd.getId(), 5)).thenReturn(1);
+
+        scheduler.runRound(WORK_TIME);
+
+        List<AutoRecruitRound> rounds = roundMapper.selectList(new LambdaQueryWrapper<>());
+        assertEquals(1, rounds.size(), "每轮结束应写入一条轮次历史");
+        AutoRecruitRound round = rounds.get(0);
+        assertEquals("full", round.getMode());
+        assertEquals(4, round.getPolled());
+        assertEquals(1, round.getScored());
+        assertEquals(1, round.getGreeted());
+        assertFalse(round.getRiskStopped());
+        assertFalse(round.getNoAccount());
+        assertNotNull(round.getFinishedAt());
+        assertNotNull(round.getStatsJson());
     }
 }

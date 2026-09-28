@@ -26,6 +26,8 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.hragent.repository.AutoRecruitRoundMapper;
+
 /**
  * AutoRecruitController 单元测试(纯 Mockito,不起 Spring 上下文):
  * 状态组装 / 账号告警口径 / 开关持久化委派 / 手动触发委派与互斥异常透传。
@@ -35,6 +37,7 @@ class AutoRecruitControllerTest {
     private AutoRecruitScheduler scheduler;
     private AutoRecruitSettingService settingService;
     private LiepinAccountMapper accountMapper;
+    private AutoRecruitRoundMapper roundMapper;
     private AutoRecruitController controller;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -44,7 +47,8 @@ class AutoRecruitControllerTest {
         scheduler = mock(AutoRecruitScheduler.class);
         settingService = mock(AutoRecruitSettingService.class);
         accountMapper = mock(LiepinAccountMapper.class);
-        controller = new AutoRecruitController(scheduler, settingService, accountMapper);
+        roundMapper = mock(AutoRecruitRoundMapper.class);
+        controller = new AutoRecruitController(scheduler, settingService, accountMapper, roundMapper);
     }
 
     private LiepinAccount account(String loginStatus, boolean circuitBreaker) {

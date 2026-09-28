@@ -62,6 +62,9 @@ CREATE TABLE IF NOT EXISTS candidate (
     snapshot      TEXT COMMENT '在线简历快照(结构化字段 JSON)',
     score         INT COMMENT '最新评分',
     pass_status   VARCHAR(20) NOT NULL DEFAULT 'PENDING' COMMENT 'PASS/FAIL/PENDING',
+    recruit_status VARCHAR(30) NOT NULL DEFAULT 'PENDING_REVIEW' COMMENT '招聘跟进状态:PENDING_REVIEW/QUALIFIED/INTERVIEW_SCHEDULED/NOT_SUITABLE',
+    resume_last_viewed_at DATETIME COMMENT '简历最后查看时间(NULL=未查看)',
+    resume_last_viewed_by BIGINT COMMENT '简历最后查看人(sys_user.id)',
     jd_id         BIGINT COMMENT '来源岗位',
     created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -141,3 +144,20 @@ CREATE TABLE IF NOT EXISTS app_setting (
     setting_value TEXT,
     updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT ='运行时设置(KV)';
+
+CREATE TABLE IF NOT EXISTS auto_recruit_round (
+    id           BIGINT AUTO_INCREMENT PRIMARY KEY,
+    started_at   DATETIME COMMENT '轮次开始时间',
+    finished_at  DATETIME NOT NULL COMMENT '轮次结束时间',
+    mode         VARCHAR(20) NOT NULL COMMENT 'full/collectOnly',
+    polled       INT NOT NULL DEFAULT 0,
+    scored       INT NOT NULL DEFAULT 0,
+    greeted      INT NOT NULL DEFAULT 0,
+    recommended  INT NOT NULL DEFAULT 0,
+    errors       INT NOT NULL DEFAULT 0,
+    risk_stopped TINYINT(1) NOT NULL DEFAULT 0 COMMENT '风控停轮',
+    no_account   TINYINT(1) NOT NULL DEFAULT 0 COMMENT '无可用账号',
+    stats_json   TEXT COMMENT '原始摘要 JSON(留档)',
+    created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_finished (finished_at)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT ='自动招聘轮次历史';

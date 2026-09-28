@@ -1,10 +1,16 @@
 package com.hragent.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.hragent.common.ApiResponse;
+import com.hragent.common.BizException;
 import com.hragent.config.AutoRecruitScheduler;
+import com.hragent.entity.AutoRecruitRound;
 import com.hragent.entity.LiepinAccount;
+import com.hragent.executor.CliException;
+import com.hragent.repository.AutoRecruitRoundMapper;
 import com.hragent.repository.LiepinAccountMapper;
 import com.hragent.security.RequireRole;
 import com.hragent.service.AutoRecruitSettingService;
@@ -13,6 +19,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDateTime;
@@ -39,19 +46,27 @@ public class AutoRecruitController {
     private final AutoRecruitScheduler autoRecruitScheduler;
     private final AutoRecruitSettingService settingService;
     private final LiepinAccountMapper accountMapper;
+    private final AutoRecruitRoundMapper roundMapper;
 
     public AutoRecruitController(AutoRecruitScheduler autoRecruitScheduler,
                                  AutoRecruitSettingService settingService,
-                                 LiepinAccountMapper accountMapper) {
+                                 LiepinAccountMapper accountMapper,
+                                 AutoRecruitRoundMapper roundMapper) {
         this.autoRecruitScheduler = autoRecruitScheduler;
         this.settingService = settingService;
         this.accountMapper = accountMapper;
+        this.roundMapper = roundMapper;
     }
 
     /** 手动执行一轮自动招聘编排(绕过时段门禁与外发开关;轮次运行中则拒绝) */
     @PostMapping("/run-once")
     public ApiResponse<Void> runOnce() {
-        autoRecruitScheduler.runRoundInternal();
+        try {
+            autoRecruitScheduler.runRoundInternal();
+        } catch (CliException e) {
+            // 轮次被中断(风控/登录态等):熔断与告警链路已在上游处理,这里向前端返回可读原因而非 500
+            throw new BizException(400, e.getMessage());
+        }
         return ApiResponse.ok(null);
     }
 
@@ -59,6 +74,16 @@ public class AutoRecruitController {
     @GetMapping("/status")
     public ApiResponse<AutoRecruitStatus> status() {
         return ApiResponse.ok(buildStatus());
+    }
+
+    /** 运行历史(轮次摘要,倒序分页;运行日志页,参照 HR Portal V2) */
+    @GetMapping("/rounds")
+    public ApiResponse<IPage<AutoRecruitRound>> rounds(@RequestParam(defaultValue = "1") int pageNo,
+                                                       @RequestParam(defaultValue = "20") int pageSize) {
+        Page<AutoRecruitRound> page = roundMapper.selectPage(
+                new Page<>(Math.max(1, pageNo), Math.min(Math.max(1, pageSize), 100)),
+                new LambdaQueryWrapper<AutoRecruitRound>().orderByDesc(AutoRecruitRound::getId));
+        return ApiResponse.ok(page);
     }
 
     /** 运行时开关(存库持久化,重启/部署保持) */
