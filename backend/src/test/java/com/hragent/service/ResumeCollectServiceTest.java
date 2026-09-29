@@ -90,6 +90,7 @@ class ResumeCollectServiceTest {
         jd.setTitle("测试岗位");
         jd.setScoreThreshold(60);
         jd.setThresholdConfirmedAt(LocalDateTime.now());
+        jd.setScoringPrefConfirmedAt(LocalDateTime.now());
         jdMapper.insert(jd);
 
         candidate = new Candidate();

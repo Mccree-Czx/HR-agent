@@ -6,54 +6,40 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 评分结果(评审 P2-11:结构化输出,字段级校验在 fromJson 中完成)。
- * pending=true 表示因前置门禁(如期望职能待确认)无法定论,须置 PENDING 且绝不判为通过。
+ * 星级评分结果(2026-09-29 星级模型 v2):
+ * star 1-5;veto_suspects=疑似命中一票否决点(待人工复核,不直接淘汰);
+ * bonus_hits=命中加分点。字段级校验在 fromJson 中完成。
  */
 public record ScoreResult(
-        int score,
-        boolean pass,
-        boolean pending,
+        int star,
         String summary,
-        List<String> reasons) {
+        List<String> reasons,
+        List<VetoSuspect> vetoSuspects,
+        List<String> bonusHits) {
 
-    /** 缺省通过门槛(既有调用点不传阈值时的向后兼容默认值) */
-    public static final int DEFAULT_PASS_THRESHOLD = 60;
-
-    /**
-     * 从模型输出 JSON 解析并校验(使用默认门槛 {@link #DEFAULT_PASS_THRESHOLD})。
-     */
-    public static ScoreResult fromJson(JsonNode node) {
-        return fromJson(node, DEFAULT_PASS_THRESHOLD);
+    /** 疑似命中一票否决点(point=否决点原文,evidence=简历命中依据) */
+    public record VetoSuspect(String point, String evidence) {
     }
 
+    /** 打招呼线:≥该星级才主动沟通(与岗位 min_comm_star 默认值一致) */
+    public static final int DEFAULT_COMM_STAR = 3;
+
     /**
-     * 从模型输出 JSON 解析并校验。
-     * 非法结构/越界分数/缺失字段均抛出 IllegalArgumentException,由调用方决定重试或放弃。
-     * 硬规则(评审 Important-2):最终 pass = 模型 pass && score >= passThreshold,
-     * 即模型判过但分数低于门槛时**降级为不通过**,门槛由岗位确认值决定。
+     * 从模型输出 JSON 解析并校验(星级模型 v2)。
+     * 非法结构/越界星级/缺失字段均抛出 IllegalArgumentException,由调用方决定重试或放弃。
      */
-    public static ScoreResult fromJson(JsonNode node, int passThreshold) {
+    public static ScoreResult fromJson(JsonNode node) {
         if (node == null || !node.isObject()) {
             throw new IllegalArgumentException("评分输出不是 JSON 对象");
         }
-        JsonNode scoreNode = node.get("score");
-        if (scoreNode == null || !scoreNode.isInt()) {
-            throw new IllegalArgumentException("评分输出缺少合法 score 字段");
+        JsonNode starNode = node.get("star");
+        if (starNode == null || !starNode.isInt()) {
+            throw new IllegalArgumentException("评分输出缺少合法 star 字段");
         }
-        int score = scoreNode.asInt();
-        if (score < 0 || score > 100) {
-            throw new IllegalArgumentException("score 越界: " + score);
+        int star = starNode.asInt();
+        if (star < 1 || star > 5) {
+            throw new IllegalArgumentException("star 越界(应为 1-5): " + star);
         }
-        JsonNode passNode = node.get("pass");
-        if (passNode == null || !passNode.isBoolean()) {
-            throw new IllegalArgumentException("评分输出缺少合法 pass 字段");
-        }
-        boolean modelPass = passNode.asBoolean();
-        if (score >= passThreshold && !modelPass) {
-            throw new IllegalArgumentException("score 达阈值但 pass=false,输出矛盾");
-        }
-        // 硬规则:模型判过但未达门槛 → 降级为不通过(门槛不得被模型布尔值绕过)
-        boolean pass = modelPass && score >= passThreshold;
         String summary = node.has("summary") ? node.get("summary").asText("") : "";
         List<String> reasons = new ArrayList<>();
         if (node.has("reasons") && node.get("reasons").isArray()) {
@@ -61,16 +47,37 @@ public record ScoreResult(
                 reasons.add(r.asText(""));
             }
         }
-        return new ScoreResult(score, pass, false, summary, reasons);
+        List<VetoSuspect> vetoSuspects = new ArrayList<>();
+        if (node.has("veto_suspects") && node.get("veto_suspects").isArray()) {
+            for (JsonNode v : node.get("veto_suspects")) {
+                if (v.isTextual()) {
+                    vetoSuspects.add(new VetoSuspect(v.asText(""), ""));
+                } else if (v.isObject()) {
+                    vetoSuspects.add(new VetoSuspect(
+                            v.path("point").asText(""), v.path("evidence").asText("")));
+                }
+            }
+        }
+        List<String> bonusHits = new ArrayList<>();
+        if (node.has("bonus_hits") && node.get("bonus_hits").isArray()) {
+            for (JsonNode b : node.get("bonus_hits")) {
+                bonusHits.add(b.asText(""));
+            }
+        }
+        return new ScoreResult(star, summary, reasons, vetoSuspects, bonusHits);
     }
 
-    /** 预筛失败的快捷构造(不调模型) */
-    public static ScoreResult preFilteredFail(String reason) {
-        return new ScoreResult(0, false, false, reason, List.of(reason));
-    }
-
-    /** 待确认的快捷构造(不调模型,不判通过):如期望职能证据缺失 */
-    public static ScoreResult pending(String reason) {
-        return new ScoreResult(0, false, true, reason, List.of(reason));
+    /**
+     * 星级对应的台账动作状态(2026-09-29 动作矩阵):
+     * 疑似否决且星级达标 → HOLD(挂起待人工复核);≥3 星 → PASS;2 星 → KEPT(留库不打扰);1 星 → FAIL(淘汰)。
+     */
+    public String actionStatus() {
+        if (!vetoSuspects.isEmpty() && star >= DEFAULT_COMM_STAR) {
+            return "HOLD";
+        }
+        if (star >= DEFAULT_COMM_STAR) {
+            return "PASS";
+        }
+        return star == 2 ? "KEPT" : "FAIL";
     }
 }

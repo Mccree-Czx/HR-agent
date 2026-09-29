@@ -14,7 +14,10 @@ export const jdApi = {
   publish: (id) => http.post(`/jd/${id}/publish`),
   syncLiepin: () => http.post('/jd/sync-liepin'),
   suggestThreshold: (id) => http.post(`/jd/${id}/threshold/suggest`),
-  confirmThreshold: (id, threshold) => http.put(`/jd/${id}/threshold/confirm`, { threshold })
+  confirmThreshold: (id, threshold) => http.put(`/jd/${id}/threshold/confirm`, { threshold }),
+  // 评分偏好(2026-09-29 星级模型):读取 / 保存并确认(保存=确认→放行外发;仅 ADMIN)
+  scoringPreference: (id) => http.get(`/jd/${id}/scoring-preference`),
+  saveScoringPreference: (id, data) => http.put(`/jd/${id}/scoring-preference`, data)
 }
 
 export const accountApi = {
@@ -45,6 +48,8 @@ export const candidateApi = {
   detail: (id) => http.get(`/candidate/${id}/detail`),
   // 招聘跟进状态(HR 工作流:待筛选/合格/已约面/不合适)
   setRecruitStatus: (id, recruitStatus) => http.patch(`/candidate/${id}/recruit-status`, { recruitStatus }),
+  // 疑似否决改判(2026-09-29):confirm=确认淘汰;reject=驳回按星级恢复
+  resolveVeto: (id, action) => http.patch(`/candidate/${id}/veto`, { action }),
   // 在线简历(实时拉取平台详情;CLI 最长达 3 分钟,关闭 axios 超时)
   onlineResume: (id) => http.post(`/candidate/${id}/online-resume`, null, { timeout: 0 })
 }

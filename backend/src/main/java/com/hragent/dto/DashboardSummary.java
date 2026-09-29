@@ -23,7 +23,7 @@ public record DashboardSummary(
     public record RecruitStatusCounts(long pendingReview, long qualified, long interviewScheduled, long notSuitable) {
     }
 
-    public record LatestResume(Long candidateId, String name, String jdTitle, Integer score,
+    public record LatestResume(Long candidateId, String name, String jdTitle, Integer score, Integer star,
                                LocalDateTime resumeCreatedAt) {
     }
 }

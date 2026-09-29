@@ -14,20 +14,23 @@ import com.hragent.repository.CandidateMapper;
 import com.hragent.repository.GreetingRecordMapper;
 import com.hragent.repository.JdMapper;
 import com.hragent.repository.LiepinAccountMapper;
+import com.hragent.scoring.ScoreResult;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 
 /**
  * 打招呼模块(评审 P1-5/P1-6):
  * - 全局防重复联系:同一候选人仅可被联系一次(greeting_record.candidate_id 唯一键 + 业务查重)
  * - 账号维度模式:AUTO 直接发送;MANUAL 生成待确认记录不发送(阶段 4 确认列表处理)
- * - 门槛门禁(fail-closed):来源岗位未确认门槛(threshold_confirmed_at 为空)绝不外发
+ * - 评分偏好门禁(fail-closed):来源岗位未确认评分偏好(scoring_pref_confirmed_at 为空)绝不外发(2026-09-29 起替代门槛确认)
  * - 操作节奏:同账号两次发送间隔不小于 greetIntervalSeconds(评审 P0-3)
  * - 注意:系统自设的每日配额拦截已移除(daily_greet_quota 列仅作平台权益参考)
  */
@@ -68,23 +71,65 @@ public class GreetingService {
      * 对岗位下「评分通过且未联系过」的候选人打招呼,最多 limit 个。
      * 返回成功创建打招呼记录的数量。
      */
+    /** 专道溢出判定时间格式(与 MySQL DATETIME 文本比较) */
+    private static final DateTimeFormatter CUTOFF_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
+    /** 轮内招呼选择:star=3 或分数时代遗留 PASS(star 为空);4-5 星由专道窗口处理(2026-09-29 动作矩阵) */
     @Transactional
     public int greetPassed(Long jdId, int limit) {
-        // 取数即排除「已联系者」(SEND_FAILED 允许重试不算已联系),再按分数取前 limit 名;
+        // 取数即排除「已联系者」(SEND_FAILED 允许重试不算已联系);
         // 否则前 N 名被去重后每轮 created=0,存量将永久停在 Top-N 不再推进。
         List<Candidate> candidates = candidateMapper.selectList(new LambdaQueryWrapper<Candidate>()
                 .eq(Candidate::getJdId, jdId)
                 .eq(Candidate::getPassStatus, "PASS")
+                .and(w -> w.isNull(Candidate::getStar).or().eq(Candidate::getStar, 3))
                 .notExists("SELECT 1 FROM greeting_record g"
                         + " WHERE g.candidate_id = candidate.id AND g.status <> 'SEND_FAILED'")
+                .orderByDesc(Candidate::getStar)
                 .orderByDesc(Candidate::getScore)
                 .last("LIMIT " + Math.max(1, Math.min(limit, 200))));
-        if (candidates.isEmpty()) {
-            log.info("岗位 {} 无通过评分且待联系的候选人", jdId);
+        return greetCandidates(candidates, "轮内招呼");
+    }
+
+    /**
+     * 轮内溢出(2026-09-29):star≥4 且评分早于上一专道窗口起点仍未招呼者,轮内按预算插发。
+     * 判定基准由调度器给出({@code cutoff}),查询侧以 score_record.created_at 比对。
+     */
+    public int greetOverflow(Long jdId, int limit, LocalDateTime cutoff) {
+        if (cutoff == null) {
             return 0;
         }
+        List<Candidate> candidates = candidateMapper.selectList(new LambdaQueryWrapper<Candidate>()
+                .eq(Candidate::getJdId, jdId)
+                .eq(Candidate::getPassStatus, "PASS")
+                .ge(Candidate::getStar, ScoreResult.DEFAULT_COMM_STAR + 1)
+                .notExists("SELECT 1 FROM greeting_record g"
+                        + " WHERE g.candidate_id = candidate.id AND g.status <> 'SEND_FAILED'")
+                .exists("SELECT 1 FROM score_record sr WHERE sr.candidate_id = candidate.id"
+                        + " AND sr.star >= 4 AND sr.created_at <= '" + CUTOFF_FMT.format(cutoff) + "'")
+                .orderByDesc(Candidate::getStar)
+                .last("LIMIT " + Math.max(1, Math.min(limit, 200))));
+        return greetCandidates(candidates, "轮内溢出(4-5星)");
+    }
 
-        int created = 0;
+    /** 专道窗口(2026-09-29):全部岗位 star≥4 未招呼队列,FIFO;不占轮内预算,逐条受 60s 节奏自然封顶 */
+    public int greetStarLane(int limit) {
+        List<Candidate> candidates = candidateMapper.selectList(new LambdaQueryWrapper<Candidate>()
+                .eq(Candidate::getPassStatus, "PASS")
+                .ge(Candidate::getStar, ScoreResult.DEFAULT_COMM_STAR + 1)
+                .notExists("SELECT 1 FROM greeting_record g"
+                        + " WHERE g.candidate_id = candidate.id AND g.status <> 'SEND_FAILED'")
+                .orderByAsc(Candidate::getId)
+                .last("LIMIT " + Math.max(1, Math.min(limit, 200))));
+        return greetCandidates(candidates, "专道(4-5星)");
+    }
+
+    /** 批量发送(账号查找 + tryGreet 循环;风控类异常上抛由调用方处理) */
+    private int greetCandidates(List<Candidate> candidates, String channel) {
+        if (candidates.isEmpty()) {
+            log.info("{}:无待联系候选人", channel);
+            return 0;
+        }
         // 单账号场景简化:取第一个正常账号;多账号轮询在阶段 4 台账完善
         LiepinAccount account = accountMapper.selectOne(new LambdaQueryWrapper<LiepinAccount>()
                 .eq(LiepinAccount::getLoginStatus, "NORMAL")
@@ -94,6 +139,7 @@ public class GreetingService {
             log.warn("无可用猎聘账号(NORMAL),无法打招呼");
             return 0;
         }
+        int created = 0;
         for (Candidate candidate : candidates) {
             if (tryGreet(account, candidate)) {
                 created++;
@@ -113,10 +159,10 @@ public class GreetingService {
             return false;
         }
 
-        // 2. 门槛门禁(fail-closed):来源岗位未确认门槛 → 绝不外发,不产生任何记录/状态变更
+        // 2. 评分偏好门禁(fail-closed,2026-09-29 起替代门槛确认):来源岗位未保存/确认评分偏好 → 绝不外发
         Jd jd = candidate.getJdId() == null ? null : jdMapper.selectById(candidate.getJdId());
-        if (jd == null || jd.getThresholdConfirmedAt() == null) {
-            log.warn("岗位未确认门槛,跳过外发(候选人 {}, JD {})", candidate.getId(), candidate.getJdId());
+        if (jd == null || jd.getScoringPrefConfirmedAt() == null) {
+            log.warn("岗位未确认评分偏好,跳过外发(候选人 {}, JD {})", candidate.getId(), candidate.getJdId());
             return false;
         }
 

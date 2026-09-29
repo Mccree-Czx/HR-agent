@@ -214,30 +214,29 @@ class AutoRecruitSchedulerTest {
 
     @Test
     void isRunWindowBoundaries() {
-        // 2026-09-25 周五 / 09-26 周六 / 09-27 周日 / 09-28 周一
-        assertTrue(AutoRecruitScheduler.isRunWindow(LocalDateTime.of(2026, 9, 25, 18, 59)), "周五18:59应为true");
-        assertTrue(AutoRecruitScheduler.isRunWindow(LocalDateTime.of(2026, 9, 25, 9, 0)), "周五9:00应为true");
-        assertFalse(AutoRecruitScheduler.isRunWindow(LocalDateTime.of(2026, 9, 25, 19, 0)), "周五19:00应为false");
+        // 2026-09-29 起时段延长为 06:00–23:00(原有周末同执行不变)
+        assertTrue(AutoRecruitScheduler.isRunWindow(LocalDateTime.of(2026, 9, 25, 23, 59)), "周五23:59应为true");
+        assertTrue(AutoRecruitScheduler.isRunWindow(LocalDateTime.of(2026, 9, 25, 6, 0)), "周五6:00应为true");
+        assertFalse(AutoRecruitScheduler.isRunWindow(LocalDateTime.of(2026, 9, 25, 5, 59)), "周五5:59应为false");
         assertTrue(AutoRecruitScheduler.isRunWindow(LocalDateTime.of(2026, 9, 26, 10, 0)), "周六应为true(每天执行)");
-        assertTrue(AutoRecruitScheduler.isRunWindow(LocalDateTime.of(2026, 9, 27, 9, 0)), "周日应为true(每天执行)");
-        assertTrue(AutoRecruitScheduler.isRunWindow(LocalDateTime.of(2026, 9, 28, 9, 0)), "周一9:00应为true");
-        assertFalse(AutoRecruitScheduler.isRunWindow(LocalDateTime.of(2026, 9, 28, 8, 59)), "周一8:59应为false");
-        assertFalse(AutoRecruitScheduler.isRunWindow(LocalDateTime.of(2026, 9, 26, 19, 0)), "周六19:00应为false(时段外)");
+        assertTrue(AutoRecruitScheduler.isRunWindow(LocalDateTime.of(2026, 9, 27, 6, 0)), "周日6:00应为true(每天执行)");
+        assertTrue(AutoRecruitScheduler.isRunWindow(LocalDateTime.of(2026, 9, 28, 22, 0)), "周一22:00应为true");
+        assertFalse(AutoRecruitScheduler.isRunWindow(LocalDateTime.of(2026, 9, 28, 5, 59)), "周一5:59应为false");
         assertFalse(AutoRecruitScheduler.isRunWindow(null), "null应为false");
     }
 
     @Test
     void nextRunAtBoundaries() {
-        assertEquals(LocalDateTime.of(2026, 9, 26, 9, 0),
-                AutoRecruitScheduler.nextRunAt(LocalDateTime.of(2026, 9, 26, 8, 59)), "8:59→当日9:00");
-        assertEquals(LocalDateTime.of(2026, 9, 26, 10, 0),
-                AutoRecruitScheduler.nextRunAt(LocalDateTime.of(2026, 9, 26, 9, 0)), "9:00→10:00(严格晚于)");
-        assertEquals(LocalDateTime.of(2026, 9, 26, 18, 0),
-                AutoRecruitScheduler.nextRunAt(LocalDateTime.of(2026, 9, 26, 17, 30)), "17:30→18:00");
-        assertEquals(LocalDateTime.of(2026, 9, 27, 9, 0),
-                AutoRecruitScheduler.nextRunAt(LocalDateTime.of(2026, 9, 26, 18, 0)), "18:00→次日9:00");
-        assertEquals(LocalDateTime.of(2026, 9, 27, 9, 0),
-                AutoRecruitScheduler.nextRunAt(LocalDateTime.of(2026, 9, 26, 23, 30)), "23:30→次日9:00");
+        assertEquals(LocalDateTime.of(2026, 9, 26, 6, 0),
+                AutoRecruitScheduler.nextRunAt(LocalDateTime.of(2026, 9, 26, 5, 59)), "5:59→当日6:00");
+        assertEquals(LocalDateTime.of(2026, 9, 26, 7, 0),
+                AutoRecruitScheduler.nextRunAt(LocalDateTime.of(2026, 9, 26, 6, 0)), "6:00→7:00(严格晚于)");
+        assertEquals(LocalDateTime.of(2026, 9, 26, 23, 0),
+                AutoRecruitScheduler.nextRunAt(LocalDateTime.of(2026, 9, 26, 22, 30)), "22:30→23:00");
+        assertEquals(LocalDateTime.of(2026, 9, 27, 6, 0),
+                AutoRecruitScheduler.nextRunAt(LocalDateTime.of(2026, 9, 26, 23, 0)), "23:00→次日6:00");
+        assertEquals(LocalDateTime.of(2026, 9, 27, 6, 0),
+                AutoRecruitScheduler.nextRunAt(LocalDateTime.of(2026, 9, 27, 3, 30)), "3:30→当日6:00");
         assertNull(AutoRecruitScheduler.nextRunAt(null), "null→null");
     }
 

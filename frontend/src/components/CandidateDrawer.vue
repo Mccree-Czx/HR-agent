@@ -13,9 +13,12 @@
           <div class="cd-meta">
             <el-tag size="small" type="info">{{ detail.jdTitle || '无岗位' }}</el-tag>
             <el-tag size="small" :type="tagOf(RECRUIT_STATUS, cur)">{{ textOf(RECRUIT_STATUS, cur) }}</el-tag>
-            <el-tag v-if="detail.candidate.passStatus === 'PASS'" size="small" type="success">评分通过</el-tag>
-            <el-tag v-else-if="detail.candidate.passStatus === 'FAIL'" size="small" type="danger">评分未通过</el-tag>
-            <el-tag v-else size="small" type="info">待评分</el-tag>
+            <el-tag v-if="detail.candidate.star" size="small" :type="starTagOf(detail.candidate.star)">
+              {{ starTextOf(detail.candidate.star) }} · {{ textOf(PASS_STATUS, detail.candidate.passStatus) }}
+            </el-tag>
+            <el-tag v-else size="small" :type="tagOf(PASS_STATUS, detail.candidate.passStatus)">
+              {{ textOf(PASS_STATUS, detail.candidate.passStatus) }}
+            </el-tag>
           </div>
         </div>
         <el-button text @click="$emit('update:modelValue', false)">关闭</el-button>
@@ -44,9 +47,25 @@
         <template #header>AI 评分</template>
         <template v-if="detail.latestScore">
           <div class="cd-score-row">
-            <span class="cd-score-num">{{ detail.latestScore.score }}</span>
-            <span class="cd-stars">{{ starText(detail.latestScore.score) }}</span>
+            <template v-if="detail.latestScore.star">
+              <span class="cd-score-num">{{ detail.latestScore.star }}</span>
+              <span class="cd-stars">{{ starTextOf(detail.latestScore.star) }}</span>
+            </template>
+            <template v-else>
+              <span class="cd-score-num">{{ detail.latestScore.score }}</span>
+              <span class="cd-score-meta">旧分制记录</span>
+            </template>
             <span class="cd-score-meta">{{ fmt(detail.latestScore.createdAt) }} · {{ detail.latestScore.model || '-' }}</span>
+          </div>
+          <div v-if="vetoList.length" class="cd-veto">
+            <el-tag type="danger" size="small">疑似否决 {{ vetoList.length }}</el-tag>
+            <div v-for="(v, i) in vetoList" :key="i" class="cd-veto-item">
+              {{ v.point || v }}<span v-if="v.evidence" class="cd-veto-evidence">（{{ v.evidence }}）</span>
+            </div>
+          </div>
+          <div v-else-if="bonusList.length" class="cd-bonus">
+            <el-tag type="success" size="small">加分 {{ bonusList.length }}</el-tag>
+            <div v-for="(b, i) in bonusList" :key="i" class="cd-bonus-item">{{ b }}</div>
           </div>
           <div class="cd-reason">{{ detail.latestScore.reason || '无评分理由' }}</div>
         </template>
@@ -127,7 +146,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { candidateApi } from '../api/modules'
-import { RECRUIT_STATUS, textOf, tagOf, starText, formatBytes } from '../utils/labels'
+import { RECRUIT_STATUS, PASS_STATUS, textOf, tagOf, starTextOf, starTagOf, parseJsonList, formatBytes } from '../utils/labels'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -143,6 +162,10 @@ const onlineLoading = ref(false)
 const onlineResume = ref(null)
 
 const cur = computed(() => detail.value?.candidate?.recruitStatus || 'PENDING_REVIEW')
+
+/** 疑似否决 / 加分命中(JSON 文本容错解析;2026-09-29) */
+const vetoList = computed(() => parseJsonList(detail.value?.latestScore?.vetoSuspects))
+const bonusList = computed(() => parseJsonList(detail.value?.latestScore?.bonusHits))
 
 const lastViewedText = computed(() => {
   const c = detail.value?.candidate
@@ -304,6 +327,24 @@ onBeforeUnmount(clearPreview)
   line-height: 1.7;
   color: var(--hr-text-2);
   white-space: pre-wrap;
+}
+.cd-veto,
+.cd-bonus {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--hr-text-2);
+}
+.cd-veto-item,
+.cd-bonus-item {
+  margin-top: 4px;
+  padding-left: 8px;
+  border-left: 2px solid var(--el-color-danger-light-5);
+}
+.cd-bonus-item {
+  border-left-color: var(--el-color-success-light-5);
+}
+.cd-veto-evidence {
+  color: var(--hr-text-3);
 }
 .cd-file-row {
   display: flex;

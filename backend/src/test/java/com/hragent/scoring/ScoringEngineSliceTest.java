@@ -105,7 +105,7 @@ class ScoringEngineSliceTest {
     @Test
     void sliceProcessesAtMostMaxAndReportsZeroWhenDrained() {
         when(aiClient.chat(anyString(), anyString()))
-                .thenReturn("{\"score\":75,\"pass\":true,\"summary\":\"ok\",\"reasons\":[\"a\"]}");
+                .thenReturn("{\"star\":3,\"summary\":\"ok\",\"reasons\":[\"a\"]}");
         candidate("{\"name\":\"甲\",\"salary\":\"20-30K\",\"want_title\":\"软件工程师\"}", "r1");
         candidate("{\"name\":\"乙\",\"salary\":\"20-30K\",\"want_title\":\"软件工程师\"}", "r2");
         candidate("{\"name\":\"丙\",\"salary\":\"20-30K\",\"want_title\":\"软件工程师\"}", "r3");
@@ -121,7 +121,7 @@ class ScoringEngineSliceTest {
     void perJdReadBudgetIsSharedAcrossSlices() throws Exception {
         createNormalAccount();
         when(aiClient.chat(anyString(), anyString()))
-                .thenReturn("{\"score\":75,\"pass\":true,\"summary\":\"ok\",\"reasons\":[\"a\"]}");
+                .thenReturn("{\"star\":3,\"summary\":\"ok\",\"reasons\":[\"a\"]}");
         when(commandService.resume(any(), anyString(), any())).thenReturn(Optional.of(
                 objectMapper.readTree("{\"want_title\":\"软件工程师\",\"expectation_evidence\":{"
                         + "\"source\":\"resumeDetailVo.jobWant.jobTitleNames\","
@@ -144,7 +144,7 @@ class ScoringEngineSliceTest {
         }
 
         verify(commandService, times(1)).resume(any(), anyString(), any());
-        assertEquals(3, scoreRecordMapper.selectCount(null), "其余候选人保持待确认但照常落评分记录");
+        assertEquals(3, scoreRecordMapper.selectCount(null), "其余候选人照常落评分记录(读取受预算限制)");
     }
 
     @Test

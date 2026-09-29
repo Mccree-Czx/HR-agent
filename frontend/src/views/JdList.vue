@@ -32,10 +32,10 @@
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="评分门槛" width="130">
+      <el-table-column label="评分偏好" width="130">
         <template #default="{ row }">
-          <el-tag v-if="row.thresholdConfirmedAt" type="success" size="small">已确认 {{ row.scoreThreshold }} 分</el-tag>
-          <el-tag v-else type="warning" size="small">门槛待确认</el-tag>
+          <el-tag v-if="row.scoringPrefConfirmedAt" type="success" size="small">已确认 {{ row.minCommStar || 3 }} 星</el-tag>
+          <el-tag v-else type="warning" size="small">偏好待确认</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="猎聘发布" width="150">
@@ -54,7 +54,7 @@
       <el-table-column label="操作" width="420" fixed="right">
         <template #default="{ row }">
           <el-button link type="warning" :disabled="row.publishStatus === 'PUBLISHED' || row.publishStatus === 'PUBLISHING'" :loading="row._publishing" @click="handlePublish(row)">发布到猎聘</el-button>
-          <el-button link type="primary" @click="openThreshold(row)">门槛</el-button>
+          <el-button link type="primary" @click="openPreference(row)">评分偏好</el-button>
           <el-button link type="primary" @click="openCommunication(row)">筛选与沟通</el-button>
           <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
           <el-button link type="danger" :loading="row._deleting" @click="handleDelete(row)">删除</el-button>
@@ -115,15 +115,15 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="thresholdDialogVisible" :title="`评分门槛 - ${thresholdRow?.title || ''}`" width="560px">
-      <div v-if="thresholdRow">
+    <el-dialog v-model="prefDialogVisible" :title="`评分偏好 - ${prefRow?.title || ''}`" width="620px">
+      <div v-if="prefRow">
         <el-alert
-          v-if="thresholdRow.thresholdConfirmedAt"
+          v-if="prefRow.scoringPrefConfirmedAt"
           type="success"
           :closable="false"
           show-icon
-          :title="`已确认门槛: ${thresholdRow.scoreThreshold} 分`"
-          description="门槛已确认,该岗位允许自动外发;重新确认将覆盖当前门槛。"
+          title="评分偏好已确认"
+          description="该岗位允许自动外发;重新保存将覆盖当前偏好。"
           style="margin-bottom: 12px"
         />
         <el-alert
@@ -131,55 +131,57 @@
           type="warning"
           :closable="false"
           show-icon
-          title="门槛待确认"
-          description="未确认门槛的岗位禁止一切自动外发(仅收集来信与附件)。"
+          title="评分偏好待确认"
+          description="未确认评分偏好的岗位禁止一切自动外发(仅收集来信与附件)。"
           style="margin-bottom: 12px"
         />
-        <el-form label-width="90px">
-          <el-form-item label="AI 建议">
-            <div style="width: 100%">
-              <span v-if="thresholdRow.thresholdSuggestion">{{ thresholdRow.thresholdSuggestion }}</span>
-              <span v-else style="color: var(--hr-text-3)">暂无建议,可点击「生成建议」</span>
-              <el-button link type="primary" :loading="suggesting" style="margin-left: 8px" @click="handleSuggest">生成建议</el-button>
-            </div>
+        <el-form label-width="120px">
+          <el-form-item label="最低主动沟通星级">
+            <el-select v-model="prefForm.minCommStar" style="width: 160px">
+              <el-option v-for="n in 5" :key="n" :value="n" :label="`${n} 星`" />
+            </el-select>
+            <span class="field-hint">≥该星级自动打招呼要简历(默认 3 星=基本符合)</span>
           </el-form-item>
-          <el-form-item label="门槛分数">
-            <el-input-number v-model="thresholdInput" :min="1" :max="100" />
-            <span class="field-hint">1-100,默认取 AI 建议中的数字,否则 60</span>
+          <el-form-item label="加分点">
+            <el-input v-model="prefForm.bonusPoints" type="textarea" :rows="3" placeholder="选填,每行一项(≤10 行、每行 ≤50 字)" />
+          </el-form-item>
+          <el-form-item label="一票否决点">
+            <el-input v-model="prefForm.vetoPoints" type="textarea" :rows="3" placeholder="选填,每行一项;命中后进入人工复核,不直接淘汰" />
+          </el-form-item>
+          <el-form-item label="其他要求">
+            <el-input v-model="prefForm.otherRequirements" type="textarea" :rows="3" placeholder="选填,每行一项" />
           </el-form-item>
         </el-form>
       </div>
       <template #footer>
-        <el-button @click="thresholdDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="confirming" @click="handleConfirmThreshold">确认门槛</el-button>
+        <el-button @click="prefDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="prefSaving" @click="handleSavePreference">保存并确认</el-button>
       </template>
     </el-dialog>
 
     <el-drawer v-model="drawerVisible" :title="`筛选与沟通 - ${drawerRow?.title || ''}`" size="62%">
       <el-table :data="drawerRows" v-loading="drawerLoading" border>
         <el-table-column prop="candidate.name" label="姓名" width="100" />
-        <el-table-column label="评分" width="110">
+        <el-table-column label="星级" width="110">
           <template #default="{ row }">
-            <el-tag
-              v-if="row.latestScore"
-              :type="row.candidate.passStatus === 'PASS' ? 'success' : row.candidate.passStatus === 'FAIL' ? 'danger' : 'info'"
-              size="small"
-            >
-              {{ row.latestScore.score }} 分
+            <el-tag v-if="row.candidate.star" :type="starTagOf(row.candidate.star)" size="small">
+              {{ starTextOf(row.candidate.star) }}
             </el-tag>
+            <el-tag v-else-if="row.latestScore && row.latestScore.score" type="info" size="small">旧分 {{ row.latestScore.score }}</el-tag>
             <el-tag v-else type="info" size="small">待评分</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="pass状态" width="100">
           <template #default="{ row }">
-            <el-tag :type="passTagType(row.candidate.passStatus)" size="small">{{ passText(row.candidate.passStatus) }}</el-tag>
+            <el-tag :type="tagOf(PASS_STATUS, row.candidate.passStatus)" size="small">{{ textOf(PASS_STATUS, row.candidate.passStatus) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="职能校验" min-width="160">
+        <el-table-column label="否决/加分" min-width="160">
           <template #default="{ row }">
-            <el-tooltip v-if="hasJobMismatch(row)" :content="row.latestScore.reason">
-              <el-tag type="warning" size="small">职能待确认</el-tag>
+            <el-tooltip v-if="vetoListOf(row).length" :content="vetoTextOf(row)">
+              <el-tag type="danger" size="small">疑似否决 {{ vetoListOf(row).length }}</el-tag>
             </el-tooltip>
+            <el-tag v-else-if="bonusListOf(row).length" type="success" size="small">加分 {{ bonusListOf(row).length }}</el-tag>
             <span v-else style="color: var(--hr-text-3)">-</span>
           </template>
         </el-table-column>
@@ -212,6 +214,7 @@
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { jdApi, candidateApi } from '../api/modules'
+import { PASS_STATUS, textOf, tagOf, starTextOf, starTagOf, parseJsonList } from '../utils/labels'
 
 const rows = ref([])
 const total = ref(0)
@@ -229,12 +232,11 @@ const emptyForm = {
 }
 const form = reactive({ ...emptyForm })
 
-// 门槛确认弹窗
-const thresholdDialogVisible = ref(false)
-const thresholdRow = ref(null)
-const thresholdInput = ref(60)
-const suggesting = ref(false)
-const confirming = ref(false)
+// 评分偏好弹窗(2026-09-29 星级模型;保存=确认→放行该岗位自动外发)
+const prefDialogVisible = ref(false)
+const prefRow = ref(null)
+const prefSaving = ref(false)
+const prefForm = reactive({ minCommStar: 3, bonusPoints: '', vetoPoints: '', otherRequirements: '' })
 
 // 筛选与沟通抽屉(该岗位候选人)
 const drawerVisible = ref(false)
@@ -335,47 +337,29 @@ async function handleSync() {
   }
 }
 
-/** 从「建议{N}分:...」中提取数字;越界或缺失返回 null */
-function extractThreshold(text) {
-  if (!text) return null
-  const matched = String(text).match(/\d+/)
-  if (!matched) return null
-  const value = Number(matched[0])
-  return value >= 1 && value <= 100 ? value : null
+/** 打开评分偏好弹窗(读取当前偏好) */
+async function openPreference(row) {
+  prefRow.value = row
+  const res = await jdApi.scoringPreference(row.id)
+  const data = res.data || {}
+  prefForm.minCommStar = data.minCommStar || 3
+  prefForm.bonusPoints = data.bonusPoints || ''
+  prefForm.vetoPoints = data.vetoPoints || ''
+  prefForm.otherRequirements = data.otherRequirements || ''
+  prefDialogVisible.value = true
 }
 
-function openThreshold(row) {
-  thresholdRow.value = row
-  thresholdInput.value = row.scoreThreshold || extractThreshold(row.thresholdSuggestion) || 60
-  thresholdDialogVisible.value = true
-}
-
-async function handleSuggest() {
-  if (!thresholdRow.value) return
-  suggesting.value = true
+/** 保存并确认(后端校验 ≤10 行/≤50 字;保存即确认→放行外发) */
+async function handleSavePreference() {
+  if (!prefRow.value) return
+  prefSaving.value = true
   try {
-    const res = await jdApi.suggestThreshold(thresholdRow.value.id)
-    thresholdRow.value.thresholdSuggestion = res.data
-    const suggested = extractThreshold(res.data)
-    if (suggested) {
-      thresholdInput.value = suggested
-    }
-    ElMessage.success('已生成建议门槛(仅建议,需人工确认)')
-  } finally {
-    suggesting.value = false
-  }
-}
-
-async function handleConfirmThreshold() {
-  if (!thresholdRow.value) return
-  confirming.value = true
-  try {
-    const res = await jdApi.confirmThreshold(thresholdRow.value.id, thresholdInput.value)
-    ElMessage.success(`门槛已确认: ${res.data.scoreThreshold} 分`)
-    thresholdDialogVisible.value = false
+    await jdApi.saveScoringPreference(prefRow.value.id, { ...prefForm })
+    ElMessage.success('评分偏好已保存并确认,该岗位已放行自动外发')
+    prefDialogVisible.value = false
     load(pageNo.value)
   } finally {
-    confirming.value = false
+    prefSaving.value = false
   }
 }
 
@@ -402,17 +386,15 @@ async function loadDrawer(page = 1) {
   }
 }
 
-/** 评分理由含「职能待确认」时提示人工复核 */
-function hasJobMismatch(row) {
-  const reason = row.latestScore && row.latestScore.reason
-  return typeof reason === 'string' && reason.includes('职能待确认')
+/** 否决/加分命中列表(JSON 文本容错解析) */
+function vetoListOf(row) {
+  return parseJsonList(row.latestScore && row.latestScore.vetoSuspects)
 }
-
-function passTagType(status) {
-  return { PASS: 'success', FAIL: 'danger', PENDING: 'info' }[status] || 'info'
+function bonusListOf(row) {
+  return parseJsonList(row.latestScore && row.latestScore.bonusHits)
 }
-function passText(status) {
-  return { PASS: '通过', FAIL: '未通过', PENDING: '待评分' }[status] || status
+function vetoTextOf(row) {
+  return vetoListOf(row).map((v) => v.point || v).join('; ')
 }
 function greetTagType(status) {
   return { SENT: 'primary', AGREED: 'success', REQUESTED: 'warning', PENDING_CONFIRM: 'info', SEND_FAILED: 'danger' }[status] || 'info'

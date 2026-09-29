@@ -26,6 +26,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+
+import com.hragent.ai.AiClient;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
@@ -92,6 +94,9 @@ class ChatPollServiceTest {
 
     @MockitoBean
     private LiepinCommandService commandService;
+
+    @MockitoBean
+    private AiClient aiClient;
 
     @MockitoBean
     private AccountPaceGuard paceGuard;
@@ -264,6 +269,9 @@ class ChatPollServiceTest {
         stubChatmsg("stranger1",
                 "{\"message_id\":\"m1\",\"sender\":\"对方\",\"opposite_im_id\":\"stranger1\","
                         + "\"payload\":{\"bodies\":[{\"type\":\"resume\",\"enresId\":\"enres-1\",\"ejobId\":\"88888\"}]}}");
+        // v2:职能软判,无快照期望证据不再冻结 PENDING,交模型出星级
+        when(aiClient.chat(anyString(), anyString()))
+                .thenReturn("{\"star\":2,\"summary\":\"信息不足\",\"reasons\":[\"无期望证据\"]}");
 
         int processed = chatPollService.pollOnce(account);
 
@@ -274,7 +282,7 @@ class ChatPollServiceTest {
         assertEquals("enres-1", c.getResumeId());
         assertEquals("李四", c.getName());
         assertEquals(jd.getId(), c.getJdId(), "能确定岗位则关联");
-        assertEquals("PENDING", c.getPassStatus(), "无快照期望证据 → 待确认,绝不 PASS");
+        assertEquals("KEPT", c.getPassStatus(), "v2:无期望证据不再冻结 PENDING,按星级结论(2星留库)");
         assertEquals(1, scoreRecordMapper.selectCount(new LambdaQueryWrapper<ScoreRecord>()
                 .eq(ScoreRecord::getCandidateId, c.getId())), "有关联岗位才走评分门禁");
     }
@@ -736,6 +744,7 @@ class ChatPollServiceTest {
         Jd jd = baseJd(title, liepinJobId);
         jd.setScoreThreshold(60);
         jd.setThresholdConfirmedAt(LocalDateTime.now());
+        jd.setScoringPrefConfirmedAt(LocalDateTime.now());
         jdMapper.insert(jd);
         return jd;
     }

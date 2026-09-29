@@ -11,7 +11,12 @@
       <el-select v-model="filterStatus" placeholder="评分状态" clearable style="width: 140px" @change="load()">
         <el-option label="待评分" value="PENDING" />
         <el-option label="已通过" value="PASS" />
+        <el-option label="留库" value="KEPT" />
+        <el-option label="疑似否决" value="HOLD" />
         <el-option label="未通过" value="FAIL" />
+      </el-select>
+      <el-select v-model="filterStar" placeholder="星级" clearable style="width: 100px" @change="load()">
+        <el-option v-for="n in 5" :key="n" :label="`${n} 星`" :value="n" />
       </el-select>
       <el-select v-model="filterRecruit" placeholder="招聘状态" clearable style="width: 130px" @change="load()">
         <el-option v-for="opt in recruitOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
@@ -38,19 +43,24 @@
           <span v-if="row.candidate.snapshot">{{ snapshotSummary(row.candidate.snapshot) }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="评分" width="190">
+      <el-table-column label="星级" width="190">
         <template #default="{ row }">
-          <template v-if="row.latestScore">
-            <span class="score-stars">{{ starText(row.latestScore.score) }}</span>
-            <el-tag :type="row.candidate.passStatus === 'PASS' ? 'success' : 'danger'" size="small">
-              {{ row.latestScore.score }} 分
+          <template v-if="row.candidate.star">
+            <el-tag :type="starTagOf(row.candidate.star)" size="small">
+              {{ starTextOf(row.candidate.star) }}
             </el-tag>
             <el-tooltip
-              v-if="row.latestScore.reason"
+              v-if="row.latestScore && row.latestScore.reason"
               :content="row.latestScore.reason"
               placement="top"
               popper-class="reason-tooltip"
             >
+              <span class="score-detail">详情</span>
+            </el-tooltip>
+          </template>
+          <template v-else-if="row.latestScore">
+            <el-tag type="info" size="small">旧分 {{ row.latestScore.score }}</el-tag>
+            <el-tooltip v-if="row.latestScore.reason" :content="row.latestScore.reason" placement="top" popper-class="reason-tooltip">
               <span class="score-detail">详情</span>
             </el-tooltip>
           </template>
@@ -85,8 +95,12 @@
           <span class="last-viewed">{{ lastViewedOf(row) }}</span>
         </template>
       </el-table-column>
-      <el-table-column v-if="activeTab === 'received'" label="操作" width="190" fixed="right">
+      <el-table-column v-if="activeTab === 'received'" label="操作" width="250" fixed="right">
         <template #default="{ row }">
+          <template v-if="row.candidate.passStatus === 'HOLD'">
+            <el-button link type="danger" @click="resolveVeto(row, 'confirm')">确认淘汰</el-button>
+            <el-button link type="success" @click="resolveVeto(row, 'reject')">驳回恢复</el-button>
+          </template>
           <el-button link type="primary" @click="openDetail(row)">详情</el-button>
           <el-button v-if="isAdmin" link type="primary" @click="redo(row.candidate.id)">重新打分</el-button>
         </template>
@@ -109,7 +123,7 @@ import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { jdApi, candidateApi, recruitApi, searchTaskApi, autoRecruitApi } from '../api/modules'
 import CandidateDrawer from '../components/CandidateDrawer.vue'
-import { GREETING_STATUS, RECRUIT_STATUS, textOf, tagOf, optionsOf, starText } from '../utils/labels'
+import { GREETING_STATUS, RECRUIT_STATUS, textOf, tagOf, optionsOf, starTextOf, starTagOf } from '../utils/labels'
 
 // 待分配视图仅 ADMIN 可见:后端 unassigned=true 亦仅对 ADMIN 生效(评审 I-1)
 const isAdmin = computed(() => localStorage.getItem('role') === 'ADMIN')
@@ -118,6 +132,7 @@ const rows = ref([])
 const jds = ref([])
 const selectedJdId = ref(null)
 const filterStatus = ref('')
+const filterStar = ref(null)
 const filterRecruit = ref('')
 const recruitOptions = optionsOf(RECRUIT_STATUS)
 const activeTab = ref('received')
@@ -163,6 +178,7 @@ async function load(page = 1) {
       pageNo: pageNo.value,
       pageSize,
       passStatus: filterStatus.value || undefined,
+      star: filterStar.value || undefined,
       recruitStatus: filterRecruit.value || undefined
     }
     if (activeTab.value === 'received') {
@@ -211,6 +227,18 @@ async function runCollect() {
 async function redo(candidateId) {
   await recruitApi.redo(candidateId)
   ElMessage.success('已重新打分')
+  load()
+}
+
+/** 疑似否决改判(2026-09-29):confirm=确认淘汰;reject=驳回并按星级恢复 */
+async function resolveVeto(row, action) {
+  const tip = action === 'confirm'
+    ? `确认淘汰候选人「${row.candidate.name || row.candidate.id}」?该操作将其置为未通过。`
+    : `驳回疑似否决,按星级恢复「${row.candidate.name || row.candidate.id}」的评分结论?`
+  await ElMessageBox.confirm(tip, action === 'confirm' ? '确认淘汰' : '驳回恢复',
+    { type: 'warning', confirmButtonText: '确认', cancelButtonText: '取消' })
+  await candidateApi.resolveVeto(row.candidate.id, action)
+  ElMessage.success(action === 'confirm' ? '已确认淘汰' : '已驳回并按星级恢复')
   load()
 }
 

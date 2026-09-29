@@ -81,6 +81,7 @@ class GreetingServiceTest {
         jd.setPublishStatus("PUBLISHED");
         jd.setScoreThreshold(60);
         jd.setThresholdConfirmedAt(LocalDateTime.now());
+        jd.setScoringPrefConfirmedAt(LocalDateTime.now());
         jdMapper.insert(jd);
         jdId = jd.getId();
 
@@ -119,6 +120,7 @@ class GreetingServiceTest {
         Jd noJob = new Jd();
         noJob.setTitle("未发布岗位");
         noJob.setThresholdConfirmedAt(LocalDateTime.now());
+        noJob.setScoringPrefConfirmedAt(LocalDateTime.now());
         jdMapper.insert(noJob);
 
         Candidate c = candidate(1);

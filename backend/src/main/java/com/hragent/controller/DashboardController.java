@@ -57,7 +57,7 @@ public class DashboardController {
                 .filter(j -> !scoped || allowed.contains(j.getId()))
                 .toList();
         long activeJobs = jobs.stream().filter(j -> "ACTIVE".equals(j.getStatus())).count();
-        long confirmedJobs = jobs.stream().filter(j -> j.getThresholdConfirmedAt() != null).count();
+        long confirmedJobs = jobs.stream().filter(j -> j.getScoringPrefConfirmedAt() != null).count();
         Map<Long, String> jdTitles = jobs.stream().collect(Collectors.toMap(Jd::getId, Jd::getTitle, (a, b) -> a));
 
         // 候选人（按授权范围）
@@ -103,6 +103,7 @@ public class DashboardController {
                             c == null ? null : c.getName(),
                             c == null || c.getJdId() == null ? null : jdTitles.get(c.getJdId()),
                             c == null ? null : c.getScore(),
+                            c == null ? null : c.getStar(),
                             f.getCreatedAt());
                 })
                 .toList();

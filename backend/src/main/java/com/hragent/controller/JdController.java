@@ -5,6 +5,7 @@ import com.hragent.common.ApiResponse;
 import com.hragent.common.BizException;
 import com.hragent.entity.Jd;
 import com.hragent.security.LoginUser;
+import com.hragent.security.RequireRole;
 import com.hragent.security.UserContext;
 import com.hragent.service.JdPublishService;
 import com.hragent.service.JdService;
@@ -62,6 +63,42 @@ public class JdController {
     @PutMapping("/{id}")
     public ApiResponse<Jd> update(@PathVariable Long id, @RequestBody Jd jd) {
         return ApiResponse.ok(jdService.update(id, jd));
+    }
+
+    /** 评分偏好读取(2026-09-29 星级模型):最低主动沟通星级 + 三个文本域 + 确认状态 */
+    @GetMapping("/{id}/scoring-preference")
+    public ApiResponse<ScoringPreferenceResponse> scoringPreference(@PathVariable Long id) {
+        Jd jd = jdService.get(id);
+        return ApiResponse.ok(new ScoringPreferenceResponse(
+                jd.getMinCommStar() == null ? 3 : jd.getMinCommStar(),
+                jd.getBonusPoints(), jd.getVetoPoints(), jd.getOtherRequirements(),
+                jd.getScoringPrefConfirmedAt(), jd.getScoringPrefConfirmedBy()));
+    }
+
+    /**
+     * 保存并确认评分偏好(2026-09-29):保存=确认(写 scoring_pref_confirmed_at/by),
+     * 确认后该岗位才允许自动外发(fail-closed 门禁唯一放行依据);仅 ADMIN。
+     */
+    @RequireRole("ADMIN")
+    @PutMapping("/{id}/scoring-preference")
+    public ApiResponse<Jd> saveScoringPreference(@PathVariable Long id,
+                                                 @RequestBody ScoringPreferenceRequest request) {
+        LoginUser user = UserContext.get();
+        return ApiResponse.ok(jdService.updateScoringPreference(id,
+                request == null ? null : request.minCommStar(),
+                request == null ? null : request.bonusPoints(),
+                request == null ? null : request.vetoPoints(),
+                request == null ? null : request.otherRequirements(),
+                user == null ? null : user.getUserId()));
+    }
+
+    public record ScoringPreferenceRequest(Integer minCommStar, String bonusPoints,
+                                           String vetoPoints, String otherRequirements) {
+    }
+
+    public record ScoringPreferenceResponse(Integer minCommStar, String bonusPoints, String vetoPoints,
+                                            String otherRequirements, java.time.LocalDateTime confirmedAt,
+                                            Long confirmedBy) {
     }
 
     /** 删除岗位:有关联猎聘职位时同步删除猎聘职位(先删猎聘成功后删系统记录) */

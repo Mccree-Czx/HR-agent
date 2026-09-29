@@ -62,6 +62,24 @@ public class Jd {
     /** 门槛确认时间;非空=已确认(允许自动外发) */
     private LocalDateTime thresholdConfirmedAt;
 
+    /** 评分偏好确认时间;非空=已确认(2026-09-29 起作为外发门禁唯一放行依据) */
+    private LocalDateTime scoringPrefConfirmedAt;
+
+    /** 评分偏好确认人 sys_user.id */
+    private Long scoringPrefConfirmedBy;
+
+    /** 最低主动沟通星级(1-5,默认 3=招呼线) */
+    private Integer minCommStar;
+
+    /** 加分点(每行一项) */
+    private String bonusPoints;
+
+    /** 一票否决点(每行一项,命中→疑似否决待人工复核) */
+    private String vetoPoints;
+
+    /** 其他要求(每行一项) */
+    private String otherRequirements;
+
     /** LOCAL=系统创建 / SYNCED=猎聘同步 */
     private String source;
 

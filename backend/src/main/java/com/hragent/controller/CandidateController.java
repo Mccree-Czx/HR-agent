@@ -28,6 +28,7 @@ import com.hragent.repository.SysUserMapper;
 import com.hragent.security.LoginUser;
 import com.hragent.security.UserContext;
 import com.hragent.service.LiepinCommandService;
+import com.hragent.service.OpLogService;
 import com.hragent.service.UserJdService;
 import com.hragent.storage.StorageService;
 import org.springframework.http.ContentDisposition;
@@ -69,13 +70,14 @@ public class CandidateController {
     private final LiepinCommandService commandService;
     private final LiepinAccountMapper accountMapper;
     private final HrAgentProperties properties;
+    private final OpLogService opLogService;
 
     public CandidateController(CandidateMapper candidateMapper, ScoreRecordMapper scoreRecordMapper,
                                GreetingRecordMapper greetingMapper, ResumeFileMapper resumeFileMapper,
                                JdMapper jdMapper, UserJdService userJdService,
                                StorageService storageService, SysUserMapper sysUserMapper,
                                LiepinCommandService commandService, LiepinAccountMapper accountMapper,
-                               HrAgentProperties properties) {
+                               HrAgentProperties properties, OpLogService opLogService) {
         this.candidateMapper = candidateMapper;
         this.scoreRecordMapper = scoreRecordMapper;
         this.greetingMapper = greetingMapper;
@@ -87,6 +89,7 @@ public class CandidateController {
         this.commandService = commandService;
         this.accountMapper = accountMapper;
         this.properties = properties;
+        this.opLogService = opLogService;
     }
 
     @GetMapping
@@ -94,6 +97,7 @@ public class CandidateController {
                                                     @RequestParam(defaultValue = "10") int pageSize,
                                                     @RequestParam(required = false) Long jdId,
                                                     @RequestParam(required = false) String passStatus,
+                                                    @RequestParam(required = false) Integer star,
                                                     @RequestParam(required = false) String recruitStatus,
                                                     @RequestParam(required = false) Boolean hasResumeFile,
                                                     @RequestParam(required = false) Boolean unassigned) {
@@ -113,6 +117,7 @@ public class CandidateController {
         LambdaQueryWrapper<Candidate> qw = new LambdaQueryWrapper<Candidate>()
                 .eq(jdId != null, Candidate::getJdId, jdId)
                 .eq(passStatus != null && !passStatus.isBlank(), Candidate::getPassStatus, passStatus)
+                .eq(star != null, Candidate::getStar, star)
                 .eq(recruitStatus != null && !recruitStatus.isBlank(), Candidate::getRecruitStatus, recruitStatus)
                 .orderByDesc(Candidate::getId);
 
@@ -226,6 +231,44 @@ public class CandidateController {
         candidate.setRecruitStatus(status);
         candidateMapper.updateById(candidate);
         return ApiResponse.ok(candidate);
+    }
+
+    /**
+     * 疑似否决改判(2026-09-29 一票否决闭环):仅对 HOLD 状态候选人可用;
+     * confirm → FAIL(确认淘汰);reject → 按星级恢复(≥3星 PASS / 2星 KEPT / 其余 FAIL);写改判人/时间 + 审计。
+     */
+    @PatchMapping("/{id}/veto")
+    public ApiResponse<Candidate> resolveVeto(@PathVariable Long id, @RequestBody VetoRequest request) {
+        String action = request == null || request.action() == null ? "" : request.action().trim();
+        if (!VETO_ACTIONS.contains(action)) {
+            throw BizException.badRequest("非法的改判动作: " + action);
+        }
+        Candidate candidate = requireVisibleCandidate(id, "无权操作该候选人");
+        if (!"HOLD".equals(candidate.getPassStatus())) {
+            throw BizException.badRequest("该候选人当前非疑似否决(HOLD)状态,无需改判");
+        }
+        LoginUser user = UserContext.get();
+        String resolved;
+        if ("confirm".equals(action)) {
+            resolved = "FAIL";
+        } else {
+            int star = candidate.getStar() == null ? 1 : candidate.getStar();
+            resolved = star >= 3 ? "PASS" : star == 2 ? "KEPT" : "FAIL";
+        }
+        candidate.setPassStatus(resolved);
+        candidate.setVetoConfirmedBy(user.getUserId());
+        candidate.setVetoConfirmedAt(LocalDateTime.now());
+        candidateMapper.updateById(candidate);
+        opLogService.log("UPDATE", "candidate", id,
+                ("confirm".equals(action) ? "疑似否决确认淘汰" : "疑似否决驳回,恢复为 " + resolved)
+                        + ": " + candidate.getName());
+        return ApiResponse.ok(candidate);
+    }
+
+    /** 疑似否决改判动作合法值(单一来源) */
+    private static final Set<String> VETO_ACTIONS = Set.of("confirm", "reject");
+
+    public record VetoRequest(String action) {
     }
 
     /**

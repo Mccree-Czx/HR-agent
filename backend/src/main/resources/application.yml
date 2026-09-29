@@ -63,6 +63,10 @@ hr-agent:
     poll-list-interval-minutes: ${AUTO_RECRUIT_POLL_LIST_INTERVAL_MINUTES:15}
     # 推荐任务创建/执行最小间隔(分钟;防"接力"暴发)
     recommend-gap-minutes: ${AUTO_RECRUIT_RECOMMEND_GAP_MINUTES:8}
+    # 整点轮次 cron(2026-09-29 时段延长为 06:00–23:00)
+    round-cron: ${AUTO_RECRUIT_ROUND_CRON:0 0 6-23 * * *}
+    # 4-5 星专道窗口 cron(每小时 :51–:59,不占轮内预算;2026-09-29)
+    star-tail-cron: ${AUTO_RECRUIT_STAR_TAIL_CRON:0 51 6-22 * * *}
     # 疑似拦截冻结退避时长(分钟;首次命中冻结、到期复测一次;0=立即熔断)
     risk-probe-backoff-minutes: ${AUTO_RECRUIT_RISK_PROBE_BACKOFF_MINUTES:15}
     # 会话列表拉取失败后的轮内重试等待(毫秒)

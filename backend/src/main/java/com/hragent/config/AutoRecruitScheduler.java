@@ -48,7 +48,7 @@ import java.util.function.Supplier;
  * 自动招聘闭环定时编排(2026-09-26 运行时开关;2026-09-28 节拍改造"50 分钟平摊")。
  *
  * <ul>
- *     <li><b>调度</b>:北京时间每天 09:00–18:00 每整点启动一轮(含 18:00,周末与节假日同样执行);
+ *     <li><b>调度</b>:北京时间每天 06:00–23:00 每整点启动一轮(含 23:00,周末与节假日同样执行);
  *         轮次在 {@code spreadMinutes}(默认 50)窗口内<b>匀速</b>执行全部平台动作,到期未完成顺延下轮
  *         (各动作幂等,下轮自然补做;不再有"整点暴发")</li>
  *     <li><b>节拍</b>:统一队列一 tick 一动作;优先级 会话处理&gt;列表刷新&gt;打招呼&gt;简历读取&gt;推荐创建;
@@ -68,13 +68,13 @@ public class AutoRecruitScheduler {
 
     /** 运行时段时区(北京时间) */
     private static final ZoneId ZONE = ZoneId.of("Asia/Shanghai");
-    /** 运行时段起点(含) */
-    private static final LocalTime WINDOW_START = LocalTime.of(9, 0);
+    /** 运行时段起点(含;2026-09-29 起 06:00–23:00) */
+    private static final LocalTime WINDOW_START = LocalTime.of(6, 0);
     /** 运行时段终点(含),整点触发由 cron 保证 */
-    private static final LocalTime WINDOW_END = LocalTime.of(18, 59, 59);
-    /** 运行时段首/末整点(与 cron 9-18 对齐,nextRunAt 计算用) */
-    private static final int FIRST_HOUR = 9;
-    private static final int LAST_HOUR = 18;
+    private static final LocalTime WINDOW_END = LocalTime.of(23, 59, 59);
+    /** 运行时段首/末整点(与 cron 6-23 对齐,nextRunAt 计算用) */
+    private static final int FIRST_HOUR = 6;
+    private static final int LAST_HOUR = 23;
     /** 等待类睡眠的分段粒度(毫秒):保证墙钟判定与收尾响应的及时性 */
     private static final long SLEEP_CHUNK_MILLIS = 60_000;
 
@@ -141,10 +141,68 @@ public class AutoRecruitScheduler {
         this.cliExecutor = cliExecutor;
     }
 
-    /** 每天 09:00–18:00 每整点启动一轮(周末与节假日同样执行) */
-    @Scheduled(cron = "0 0 9-18 * * *", zone = "Asia/Shanghai")
+    /** 每天 06:00–23:00 每整点启动一轮(周末与节假日同样执行) */
+    @Scheduled(cron = "${hr-agent.auto-recruit.round-cron:0 0 6-23 * * *}", zone = "Asia/Shanghai")
     public void hourly() {
         runRound();
+    }
+
+    /**
+     * 4-5 星专道窗口(2026-09-29):每小时 :51–:59 发送 star≥4 未招呼队列,不占轮内预算;
+     * 逐条受 60s 账号级节奏自然封顶(单窗 ≈8-9 条);溢出留待下一轮轮内按预算插发。
+     * 自动外发总闸 OFF 时不外发;真实熔断信号直接中止本窗(不复测,避免自伤)。
+     */
+    @Scheduled(cron = "${hr-agent.auto-recruit.star-tail-cron:0 51 6-22 * * *}", zone = "Asia/Shanghai")
+    public void starTailWindow() {
+        LocalDateTime now = clock.get();
+        if (!settingService.isEnabled()) {
+            log.info("专道窗口:自动外发已关闭,跳过");
+            return;
+        }
+        if (running.get()) {
+            log.warn("专道窗口:轮次仍在运行,本窗顺延");
+            return;
+        }
+        LiepinAccount account = accountMapper.selectOne(new LambdaQueryWrapper<LiepinAccount>()
+                .eq(LiepinAccount::getLoginStatus, "NORMAL")
+                .orderByAsc(LiepinAccount::getId)
+                .last("LIMIT 1"));
+        if (account == null) {
+            log.warn("专道窗口:无可用猎聘账号,跳过");
+            return;
+        }
+        LocalDateTime deadline = now.truncatedTo(ChronoUnit.HOURS).plusMinutes(60);
+        int sentTotal = 0;
+        try {
+            while (clock.get().isBefore(deadline)) {
+                int sent = greetingService.greetStarLane(5);
+                if (sent <= 0) {
+                    log.info("专道窗口:4-5 星队列已清空(本次发送 {})", sentTotal);
+                    return;
+                }
+                sentTotal += sent;
+                sleepUntil(clock.get().plusSeconds(5), deadline);
+            }
+            log.info("专道窗口结束:本次发送 4-5 星 {} 人", sentTotal);
+        } catch (CliException e) {
+            if (e.getType() == CliException.Type.RISK_CONTROL) {
+                log.error("专道窗口:检测到风控信号,中止本窗(账号已按既有链路标记): {}", e.getMessage());
+            } else {
+                log.warn("专道窗口:发送失败,中止本窗: {}", e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * 4-5 星溢出判定基准(2026-09-29):早于该时刻评分且仍未打招呼者,视为「跨专道窗口未发出」,
+     * 轮内按预算插发。基准=上一小时 :51(专道窗口起点);若落在 06:00 之前,回退为昨日 22:51。
+     */
+    static LocalDateTime starOverflowCutoff(LocalDateTime now) {
+        LocalDateTime prevWindow = now.withMinute(51).withSecond(0).withNano(0).minusHours(1);
+        if (prevWindow.getHour() < FIRST_HOUR) {
+            return now.toLocalDate().minusDays(1).atTime(22, 51);
+        }
+        return prevWindow;
     }
 
     /** 执行一轮(对外可直调;时间取当前时刻) */
@@ -382,16 +440,22 @@ public class AutoRecruitScheduler {
             }
             case GREET -> {
                 AtomicInteger sent = new AtomicInteger(0);
+                LocalDateTime cutoff = starOverflowCutoff(clock.get());
                 ActionResult result = runActionWithRiskPolicy(
-                        () -> sent.set(greetingService.greetPassed(unit.jd.getId(), 1)), stats, account, deadline);
+                        () -> sent.set(unit.overflow
+                                ? greetingService.greetOverflow(unit.jd.getId(), 1, cutoff)
+                                : greetingService.greetPassed(unit.jd.getId(), 1)), stats, account, deadline);
                 if (result == ActionResult.ABORTED) {
                     return false;
                 }
                 if (result == ActionResult.DONE && sent.get() > 0) {
                     stats.greeted += sent.get();
                     work.greetCount.merge(unit.jd.getId(), 1, Integer::sum);
+                } else if (!unit.overflow) {
+                    // 常规阶段已无待联系 → 进入溢出阶段(下一 tick 尝试 4-5 星溢出,2026-09-29)
+                    work.greetNormalDone.put(unit.jd.getId(), true);
                 } else {
-                    // 无待联系候选/执行失败:本轮该岗不再尝试(下一轮/开关恢复后自然补做)
+                    // 溢出阶段无待办/失败:本轮该岗不再尝试(下一轮/开关恢复后自然补做)
                     work.greetDone.put(unit.jd.getId(), true);
                 }
             }
@@ -524,31 +588,34 @@ public class AutoRecruitScheduler {
         private final UnitType type;
         private final Jd jd;
         private final JsonNode session;
+        /** 打招呼单元是否处于 4-5 星溢出阶段(2026-09-29) */
+        private final boolean overflow;
 
-        private Unit(UnitType type, Jd jd, JsonNode session) {
+        private Unit(UnitType type, Jd jd, JsonNode session, boolean overflow) {
             this.type = type;
             this.jd = jd;
             this.session = session;
+            this.overflow = overflow;
         }
 
         static Unit session(JsonNode session) {
-            return new Unit(UnitType.POLL_SESSION, null, session);
+            return new Unit(UnitType.POLL_SESSION, null, session, false);
         }
 
         static Unit pollList() {
-            return new Unit(UnitType.POLL_LIST, null, null);
+            return new Unit(UnitType.POLL_LIST, null, null, false);
         }
 
-        static Unit greet(Jd jd) {
-            return new Unit(UnitType.GREET, jd, null);
+        static Unit greet(Jd jd, boolean overflow) {
+            return new Unit(UnitType.GREET, jd, null, overflow);
         }
 
         static Unit read(Jd jd) {
-            return new Unit(UnitType.READ, jd, null);
+            return new Unit(UnitType.READ, jd, null, false);
         }
 
         static Unit create(Jd jd) {
-            return new Unit(UnitType.RECOMMEND_CREATE, jd, null);
+            return new Unit(UnitType.RECOMMEND_CREATE, jd, null, false);
         }
     }
 
@@ -566,6 +633,8 @@ public class AutoRecruitScheduler {
         private final Map<Long, Boolean> readDone = new HashMap<>();
         private final Map<Long, Integer> greetCount = new HashMap<>();
         private final Map<Long, Boolean> greetDone = new HashMap<>();
+        /** 常规招呼阶段完成标记(进入 4-5 星溢出阶段;2026-09-29) */
+        private final Map<Long, Boolean> greetNormalDone = new HashMap<>();
         private final Map<Long, Boolean> taskDone = new HashMap<>();
         private LocalDateTime lastPollListAt;
         private LocalDateTime lastRecommendCreateAt;
@@ -586,6 +655,7 @@ public class AutoRecruitScheduler {
                 return Unit.pollList();
             }
             // ③ 打招呼(外发;单岗上限由轮内计数控制,发送节奏由 AccountPaceGuard 保证)
+            //    两阶段:先常规(star=3/旧遗留)→ 再 4-5 星溢出(跨专道窗口未发出者,占预算插发;2026-09-29)
             if (enabled) {
                 for (Jd jd : jds) {
                     if (Boolean.TRUE.equals(greetDone.get(jd.getId()))) {
@@ -595,7 +665,10 @@ public class AutoRecruitScheduler {
                         greetDone.put(jd.getId(), true);
                         continue;
                     }
-                    return Unit.greet(jd);
+                    if (!Boolean.TRUE.equals(greetNormalDone.get(jd.getId()))) {
+                        return Unit.greet(jd, false);
+                    }
+                    return Unit.greet(jd, true);
                 }
             }
             // ④ 简历读取(轮内总预算/单岗预算由 ScoringEngine 控制)
@@ -705,7 +778,7 @@ public class AutoRecruitScheduler {
     }
 
     /**
-     * 运行时段判定:每天 09:00–18:59(Asia/Shanghai 时区)返回 true;时段外或 null 返回 false。
+     * 运行时段判定:每天 06:00–23:59(Asia/Shanghai 时区)返回 true;时段外或 null 返回 false。
      * 周末与法定节假日不排除(用户拍板:每天执行)。
      */
     static boolean isRunWindow(LocalDateTime now) {
@@ -717,7 +790,7 @@ public class AutoRecruitScheduler {
     }
 
     /**
-     * 下一个定时运行时刻:严格晚于 now 的最近整点(09:00..18:00 范围内);当日已无则次日 09:00;null → null。
+     * 下一个定时运行时刻:严格晚于 now 的最近整点(06:00..23:00 范围内);当日已无则次日 06:00;null → null。
      */
     public static LocalDateTime nextRunAt(LocalDateTime now) {
         if (now == null) {

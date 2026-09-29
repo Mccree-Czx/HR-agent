@@ -18,6 +18,15 @@ export const RECRUIT_STATUS = {
   NOT_SUITABLE: { label: '不合适', tag: 'danger' }
 }
 
+/** 评分结论状态(2026-09-29 星级模型:≥3星 PASS/2星 KEPT 留库/1星 FAIL/疑似否决 HOLD) */
+export const PASS_STATUS = {
+  PASS: { label: '通过', tag: 'success' },
+  FAIL: { label: '未通过', tag: 'danger' },
+  KEPT: { label: '留库', tag: 'warning' },
+  HOLD: { label: '疑似否决', tag: 'warning' },
+  PENDING: { label: '待评分', tag: 'info' }
+}
+
 export const ROUND_MODE = {
   full: '完整轮',
   collectOnly: '只收模式'
@@ -39,18 +48,30 @@ export function optionsOf(map) {
   return Object.entries(map).map(([value, meta]) => ({ value, label: meta.label }))
 }
 
-/** 评分（0-100）→ 星级（1-5，四舍五入；未评分返回 0） */
-export function starsOf(score) {
-  if (score === null || score === undefined || score === '') return 0
-  const n = Number(score)
-  if (Number.isNaN(n)) return 0
-  return Math.max(1, Math.min(5, Math.round(n / 20)))
+/** 星级显示(★ 重复;1-5;无星级返回空串) */
+export function starTextOf(star) {
+  if (star === null || star === undefined || star === '') return ''
+  const n = Number(star)
+  if (Number.isNaN(n) || n < 1) return ''
+  return '★'.repeat(Math.min(5, Math.round(n)))
 }
 
-/** 星级字符串（★ 重复，参照产品列表呈现） */
-export function starText(score) {
-  const n = starsOf(score)
-  return n > 0 ? '★'.repeat(n) : ''
+/** 星级标签类型(≥3 绿 / 2 黄 / 1 红) */
+export function starTagOf(star) {
+  const n = Number(star)
+  if (Number.isNaN(n) || n < 1) return 'info'
+  return n >= 3 ? 'success' : n === 2 ? 'warning' : 'danger'
+}
+
+/** JSON 文本数组解析(否决/加分命中;容错返回空数组) */
+export function parseJsonList(text) {
+  if (!text) return []
+  try {
+    const v = JSON.parse(text)
+    return Array.isArray(v) ? v : []
+  } catch {
+    return []
+  }
 }
 
 /** 文件大小格式化 */

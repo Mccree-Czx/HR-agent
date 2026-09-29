@@ -161,10 +161,10 @@ public class ResumeCollectService {
     /** 索要简历并更新打招呼记录状态 */
     private void requestResume(LiepinAccount account, Candidate candidate,
                                GreetingRecord record, Duration timeout) {
-        // 门槛门禁(fail-closed):来源岗位未确认门槛 → 绝不外发索要,不改任何状态
+        // 评分偏好门禁(fail-closed,2026-09-29 起替代门槛确认):来源岗位未确认评分偏好 → 绝不外发索要,不改任何状态
         Jd jd = candidate.getJdId() == null ? null : jdMapper.selectById(candidate.getJdId());
-        if (jd == null || jd.getThresholdConfirmedAt() == null) {
-            log.warn("岗位未确认门槛,跳过索要简历(候选人 {}, JD {})", candidate.getId(), candidate.getJdId());
+        if (jd == null || jd.getScoringPrefConfirmedAt() == null) {
+            log.warn("岗位未确认评分偏好,跳过索要简历(候选人 {}, JD {})", candidate.getId(), candidate.getJdId());
             return;
         }
         String resumeId = candidate.getResumeId();

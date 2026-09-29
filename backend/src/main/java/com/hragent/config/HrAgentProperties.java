@@ -80,8 +80,8 @@ public class HrAgentProperties {
     @Data
     public static class Scoring {
 
-        /** 评分细则版本号(细则变更时更新) */
-        private String ruleVersion = "v0.1-placeholder";
+        /** 评分细则版本号(细则变更时更新;v2-star=星级模型 2026-09-29) */
+        private String ruleVersion = "v2-star";
 
         /** 通过阈值(0-100) */
         private int passThreshold = 60;
@@ -161,6 +161,12 @@ public class HrAgentProperties {
 
         /** 疑似拦截冻结退避时长(分钟):首次命中冻结,到期复测一次;0=回退"立即熔断"(2026-09-28) */
         private int riskProbeBackoffMinutes = 15;
+
+        /** 整点轮次 cron(2026-09-29 时段延长为 06:00–23:00) */
+        private String roundCron = "0 0 6-23 * * *";
+
+        /** 4-5 星专道窗口 cron(每小时 :51–:59,不占轮内预算;2026-09-29) */
+        private String starTailCron = "0 51 6-22 * * *";
     }
 
     @Data

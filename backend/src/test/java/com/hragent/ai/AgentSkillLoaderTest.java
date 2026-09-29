@@ -26,13 +26,13 @@ class AgentSkillLoaderTest {
         AgentSkillLoader.LoadedSkill skill = loader.load("resume-scoring");
 
         assertEquals("resume-scoring", skill.name());
-        assertEquals("0.1.0-placeholder", skill.version(), "version 应取自 frontmatter");
+        assertEquals("0.2.0", skill.version(), "version 应取自 frontmatter");
         String prompt = skill.systemPrompt();
         assertFalse(prompt.startsWith("---"), "systemPrompt 不应含 frontmatter 头");
         assertFalse(prompt.contains("name: resume-scoring"), "systemPrompt 不应含 frontmatter 键");
-        assertTrue(prompt.contains("硬性门槛"), "应含原评分细则段落");
-        assertTrue(prompt.contains("评分维度"), "应含原评分细则段落");
-        assertTrue(prompt.contains("通过阈值"), "应含原评分细则段落");
+        assertTrue(prompt.contains("星级标准"), "应含星级标准段落(2026-09-29 v0.2.0)");
+        assertTrue(prompt.contains("veto_suspects"), "应含疑似否决输出字段");
+        assertTrue(prompt.contains("有交集即视为满足"), "薪资口径应为区间有交集即满足");
     }
 
     @Test

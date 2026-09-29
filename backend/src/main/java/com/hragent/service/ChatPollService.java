@@ -201,8 +201,14 @@ public class ChatPollService {
      */
     private int asksThisPoll;
 
-    /** 消耗一次轮内索要预算;预算用尽返回 false(调用方跳过并攒着) */
-    private boolean tryConsumeAskBudget() {
+    /**
+     * 消耗一次轮内索要预算;星级≥4 豁免(2026-09-29 专道福利:不占预算、即时发送);
+     * 预算用尽返回 false(调用方跳过并攒着)。
+     */
+    private boolean tryConsumeAskBudget(Candidate candidate) {
+        if (candidate != null && candidate.getStar() != null && candidate.getStar() >= 4) {
+            return true;
+        }
         int limit = Math.max(0, properties.getAutoRecruit().getAskBatchLimit());
         if (asksThisPoll >= limit) {
             log.info("本轮自动索要已达上限 {}(熔断治理),暂停索要攒着,下轮继续", limit);
@@ -380,7 +386,7 @@ public class ChatPollService {
             log.info("自动外发已暂停(开关关闭),跳过已读索要(攒着后补),候选人 {}", candidate.getId());
             return false;
         }
-        if (!tryConsumeAskBudget()) {
+        if (!tryConsumeAskBudget(candidate)) {
             return false;
         }
         GreetingRecord record = greetingMapper.selectOne(new LambdaQueryWrapper<GreetingRecord>()
@@ -468,7 +474,7 @@ public class ChatPollService {
             log.info("自动外发已暂停(开关关闭),跳过回复索要(攒着后补),候选人 {}", candidate.getId());
             return false;
         }
-        if (!tryConsumeAskBudget()) {
+        if (!tryConsumeAskBudget(candidate)) {
             return false;
         }
         if (!"PASS".equals(candidate.getPassStatus())) {
@@ -582,10 +588,11 @@ public class ChatPollService {
             log.info("自动外发已暂停(开关关闭),跳过陌生来话索要(攒着后补),候选人 {}", candidateId);
             return;
         }
-        if (!tryConsumeAskBudget()) {
+        // 星级≥4 豁免轮内预算,需先取候选人(2026-09-29)
+        Candidate fresh = candidateMapper.selectById(candidateId);
+        if (!tryConsumeAskBudget(fresh)) {
             return;
         }
-        Candidate fresh = candidateMapper.selectById(candidateId);
         if (fresh == null || !"PASS".equals(fresh.getPassStatus())) {
             return;
         }
@@ -662,7 +669,8 @@ public class ChatPollService {
             return false;
         }
         Jd jd = jdMapper.selectById(candidate.getJdId());
-        return jd != null && jd.getThresholdConfirmedAt() != null;
+        // 2026-09-29 起外发门禁=评分偏好确认(替代旧门槛确认)
+        return jd != null && jd.getScoringPrefConfirmedAt() != null;
     }
 
     /** 由消息中的 job 字段映射到系统岗位;无匹配返回 null(待分配) */

@@ -49,6 +49,7 @@ class CapabilityContractTest {
         jd.setId(2L);
         jd.setLiepinJobId("101");
         jd.setThresholdConfirmedAt(LocalDateTime.now());
+        jd.setScoringPrefConfirmedAt(LocalDateTime.now());
         task = new SearchTask();
         task.setId(3L);
         task.setAccountId(1L);

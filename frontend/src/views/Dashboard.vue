@@ -4,7 +4,7 @@
       <el-card shadow="never" class="kpi">
         <div class="kpi-label">在招岗位</div>
         <div class="kpi-num">{{ summary.jobs.active }}</div>
-        <div class="kpi-sub">共 {{ summary.jobs.total }} 个 · 门槛已确认 {{ summary.jobs.thresholdConfirmed }}</div>
+        <div class="kpi-sub">共 {{ summary.jobs.total }} 个 · 评分偏好已确认 {{ summary.jobs.thresholdConfirmed }}</div>
       </el-card>
       <el-card shadow="never" class="kpi">
         <div class="kpi-label">候选人库</div>
@@ -82,9 +82,10 @@
         <el-table :data="summary.latestResumes" size="small" empty-text="暂无入库简历" @row-click="openCandidate">
           <el-table-column prop="name" label="候选人" width="90" />
           <el-table-column prop="jdTitle" label="岗位" min-width="140" show-overflow-tooltip />
-          <el-table-column label="评分" width="90">
+          <el-table-column label="星级" width="110">
             <template #default="{ row }">
-              <span v-if="row.score !== null && row.score !== undefined" class="stars">{{ starText(row.score) }}</span>
+              <span v-if="row.star" class="stars">{{ starTextOf(row.star) }}</span>
+              <span v-else-if="row.score !== null && row.score !== undefined" class="muted">旧分 {{ row.score }}</span>
               <span v-else class="muted">未评分</span>
             </template>
           </el-table-column>
@@ -106,7 +107,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { autoRecruitApi, dashboardApi } from '../api/modules'
 import CandidateDrawer from '../components/CandidateDrawer.vue'
-import { RECRUIT_STATUS, textOf, starText } from '../utils/labels'
+import { RECRUIT_STATUS, textOf, starTextOf } from '../utils/labels'
 
 const isAdmin = computed(() => localStorage.getItem('role') === 'ADMIN')
 
